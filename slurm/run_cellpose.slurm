@@ -30,7 +30,18 @@ cd "${REPO_ROOT}"
 LOG_DIR="${REPO_ROOT}/logs"
 mkdir -p "${LOG_DIR}"
 
-module load python/3.10.5          # adjust or remove if using custom stack
+if command -v module >/dev/null 2>&1; then
+    if [[ -n "${PYTHON_MODULE:-}" ]]; then
+        MODULE_NAME="${PYTHON_MODULE}"
+    else
+        MODULE_NAME="python/3.10.5"
+    fi
+    if module load "${MODULE_NAME}" >/dev/null 2>&1; then
+        echo "[$(date)] Loaded module ${MODULE_NAME}"
+    else
+        echo "[$(date)] WARNING: Module ${MODULE_NAME} unavailable. Continuing without loading it." >&2
+    fi
+fi
 
 # Activate your conda environment
 source "$HOME/miniconda3/etc/profile.d/conda.sh"
