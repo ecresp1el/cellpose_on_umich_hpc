@@ -1,0 +1,19 @@
+name: cellpose-hpc
+channels:
+  - conda-forge
+  - pytorch
+dependencies:
+  - python=3.10
+  - pip
+  - pytorch::pytorch=2.1
+  - pytorch::torchvision=0.16
+  - pytorch::torchaudio=2.1
+  - cudatoolkit=11.8        # switch to cpuonly if submitting to CPU partitions
+  - numpy
+  - scipy
+  - scikit-image
+  - tifffile
+  - tqdm
+  - pyyaml
+  - pip:
+      - -e ./cellpose
