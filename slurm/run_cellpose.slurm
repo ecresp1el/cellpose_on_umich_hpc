@@ -6,17 +6,29 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 #SBATCH --time=02:00:00
-#SBATCH --output=logs/%x-%j.out
+#SBATCH --output=%x-%j.out
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=elcrespo@umich.edu
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(realpath "${SCRIPT_DIR}/..")"
+SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$PWD}"
+
+if command -v git >/dev/null 2>&1 && REPO_ROOT="$(git -C "${SUBMIT_DIR}" rev-parse --show-toplevel 2>/dev/null)"; then
+    :
+elif [[ -d "${SUBMIT_DIR}/cellpose_on_umich_hpc/.git" ]]; then
+    REPO_ROOT="$(realpath "${SUBMIT_DIR}/cellpose_on_umich_hpc")"
+elif [[ -d "${SUBMIT_DIR}/.git" ]]; then
+    REPO_ROOT="$(realpath "${SUBMIT_DIR}")"
+else
+    echo "[$(date)] ERROR: Unable to determine repository root from submit directory ${SUBMIT_DIR}" >&2
+    exit 1
+fi
+
 cd "${REPO_ROOT}"
 
-mkdir -p logs
+LOG_DIR="${REPO_ROOT}/logs"
+mkdir -p "${LOG_DIR}"
 
 module load python/3.10.5          # adjust or remove if using custom stack
 
@@ -93,3 +105,14 @@ print("[verify] ✅ Cellpose environment and GPU check completed successfully.")
 PYTHON
 
 echo "[$(date)] GPU verification complete."
+
+if [[ -n "${SLURM_JOB_ID:-}" && -n "${SLURM_JOB_NAME:-}" ]]; then
+    SRC="${SUBMIT_DIR}/${SLURM_JOB_NAME}-${SLURM_JOB_ID}.out"
+    if [[ -f "${SRC}" ]]; then
+        DEST="${LOG_DIR}/$(basename "${SRC}")"
+        if [[ "${SRC}" != "${DEST}" ]]; then
+            mv "${SRC}" "${DEST}"
+            echo "[$(date)] Relocated job log to ${DEST}"
+        fi
+    fi
+fi
