@@ -27,8 +27,27 @@ fi
 
 cd "${REPO_ROOT}"
 
-LOG_DIR="${REPO_ROOT}/logs"
+LOG_DIR="${SUBMIT_DIR}/logs"
 mkdir -p "${LOG_DIR}"
+
+OUTPUT_FILE=""
+if [[ -n "${SLURM_JOB_ID:-}" && -n "${SLURM_JOB_NAME:-}" ]]; then
+    OUTPUT_FILE="${SUBMIT_DIR}/${SLURM_JOB_NAME}-${SLURM_JOB_ID}.out"
+fi
+
+cleanup() {
+    if [[ -n "${OUTPUT_FILE}" && -f "${OUTPUT_FILE}" ]]; then
+        local dest="${LOG_DIR}/$(basename "${OUTPUT_FILE}")"
+        if [[ "${OUTPUT_FILE}" != "${dest}" ]]; then
+            if mv "${OUTPUT_FILE}" "${dest}"; then
+                echo "[$(date)] Relocated job log to ${dest}"
+            else
+                echo "[$(date)] WARNING: Failed to move job log to ${dest}" >&2
+            fi
+        fi
+    fi
+}
+trap cleanup EXIT
 
 if command -v module >/dev/null 2>&1; then
     if [[ -n "${PYTHON_MODULE:-}" ]]; then
@@ -48,6 +67,9 @@ source "$HOME/miniconda3/etc/profile.d/conda.sh"
 conda activate cellpose-hpc
 
 echo "[$(date)] Repository root: ${REPO_ROOT}"
+echo "[$(date)] SLURM job id: ${SLURM_JOB_ID:-unknown}"
+echo "[$(date)] SLURM job name: ${SLURM_JOB_NAME:-unknown}"
+echo "[$(date)] SLURM submit dir: ${SUBMIT_DIR}"
 echo "[$(date)] Hostname: ${HOSTNAME}"
 echo "[$(date)] Python executable: $(which python)"
 echo "[$(date)] Python version: $(python --version)"
