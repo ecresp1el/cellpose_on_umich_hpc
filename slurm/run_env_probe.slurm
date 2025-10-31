@@ -98,7 +98,7 @@ echo "=== GPU (if present) ==="
 if command -v nvidia-smi >/dev/null 2>&1; then
   nvidia-smi || true
 else
-  echo "nvidia-smi not found (likely CPU node or no GPU module)."
+  echo "nvidia-smi not found (likely CPU node or no GPU module found)."
 fi
 echo
 
