@@ -1,26 +1,29 @@
 #!/usr/bin/env bash
 # =============================================================================
-# test_cellpose_envs.sh  (HEADLESS, NO LOG FILES)
+# test_cellpose_envs.sh  (HEADLESS, PRINT-ONLY)
 #
-# GOAL (plain English):
-#   1) Use ONLY the cluster’s Anaconda module (not your personal Miniconda).
-#   2) Create TWO separate, clean Conda environments:
-#        - cellpose4  -> installs cellpose==4.0.7
-#        - cellpose3  -> installs cellpose==3.1.1.2
-#   3) For each env, print exactly what’s active and installed:
-#        - which Conda base is used (cluster path)
-#        - which environment is active
-#        - which Python executable is used
-#        - Python version
-#        - Torch version + “is CUDA available?”  (expected FALSE on login nodes)
-#        - Cellpose version (from CLI and from Python import)
+# PURPOSE (plain English):
+#   - Use ONLY the cluster’s Anaconda module (python3.10-anaconda/2023.03).
+#   - Create TWO separate environments to keep versions isolated:
+#       * cellpose4  -> cellpose==4.0.7
+#       * cellpose3  -> cellpose==3.1.1.2
+#   - Print exactly what’s active and installed so non-programmers can see:
+#       * Which Conda base is used (should be /sw/pkgs/arc/...).
+#       * Which environment is active.
+#       * Which Python executable/version is used.
+#       * Torch version + “is CUDA available?” (will be FALSE on login nodes).
+#       * Cellpose version (both CLI and Python import).
 #
-# NOTES:
-#   • Environments are created under your HOME (e.g., ~/.conda/envs/...) because
-#     the cluster’s Anaconda base under /sw is read-only. This is normal.
-#   • We install CPU-only Torch first to keep the test small and stable.
-#     Later, on a GPU node, you can swap to a CUDA build of Torch.
-#   • Everything runs “headless” (no GUI packages).
+# HOW TO READ THE OUTPUT:
+#   - Lines starting with [Install]/[Paths]/[Python probe]/[Cellpose CLI version]
+#     tell you what’s happening now.
+#   - If you see cuda_available: false — that’s expected on CPU-only login nodes.
+#   - Seeing env paths under ~/.conda/envs/<name>/... is normal (your writable home).
+#
+# NEXT STEPS (GPU):
+#   - Later, in a GPU interactive shell, swap Torch to a CUDA wheel and check that
+#     cuda_available becomes TRUE. Until then, this script keeps everything small
+#     and headless for quick testing.
 # =============================================================================
 
 set -euo pipefail
@@ -31,8 +34,8 @@ echo "host: $(hostname)"
 echo "cwd : $(pwd)"
 echo "--------------------------------------------------------------"
 
-# 0) Ensure we are using the CLUSTER Anaconda module
-echo "[1] Reset modules and load cluster Anaconda (python3.10-anaconda/2023.03)"
+# 1) Use the cluster’s Anaconda (not personal Miniconda)
+echo "[1] module purge && module load python3.10-anaconda/2023.03"
 module purge
 module load python3.10-anaconda/2023.03
 
@@ -42,16 +45,10 @@ echo "type -a conda:"
 type -a conda || true
 echo "--------------------------------------------------------------"
 
-# 1) Initialize Conda activation from the module’s install.
-#    This makes `conda activate <env>` work reliably in a non-interactive shell.
+# 2) Initialize `conda activate` from the module (non-interactive safe)
 echo "[2] Initialize Conda activation from the module"
-CONDA_BASE="${ANACONDA_ROOT:-}"
-if [[ -z "${CONDA_BASE}" ]]; then
-  # Fallback: ask conda where its base is.
-  CONDA_BASE="$(conda info --base)"
-fi
+CONDA_BASE="${ANACONDA_ROOT:-$(conda info --base)}"
 echo "CONDA_BASE    = ${CONDA_BASE}"
-
 if [[ -f "${CONDA_BASE}/etc/profile.d/conda.sh" ]]; then
   # shellcheck disable=SC1090
   source "${CONDA_BASE}/etc/profile.d/conda.sh"
@@ -66,17 +63,15 @@ echo "conda version = $(conda --version 2>&1 || true)"
 echo "base env path = $(conda info | awk -F': ' '/base environment/ {print $2}')"
 echo "--------------------------------------------------------------"
 
-# Small helper to (re)create and verify an env.
-# Arguments:
-#   $1 = env name (e.g., cellpose4)
-#   $2 = cellpose version (e.g., 4.0.7)
+# Helper: (re)create and verify an env. Forces CPU-only Torch so it’s small & stable.
 create_and_check () {
   local ENV_NAME="$1"
   local CP_VER="$2"
 
   echo
-  echo "=== [CREATE/VERIFY] ${ENV_NAME} (cellpose==${CP_VER}, CPU-first) ==="
-  # If the env already exists, reuse it; otherwise create it.
+  echo "=== [CREATE/VERIFY] ${ENV_NAME} (cellpose==${CP_VER}, CPU-only Torch) ==="
+
+  # Create env only if it doesn't exist yet
   if conda env list | awk '{print $1}' | grep -qx "${ENV_NAME}"; then
     echo "Env '${ENV_NAME}' already exists — reusing."
   else
@@ -89,7 +84,7 @@ create_and_check () {
   echo "ACTIVE ENV    = ${CONDA_DEFAULT_ENV}"
 
   echo
-  echo "[Paths and versions]"
+  echo "[Paths]"
   echo "which python   = $(command -v python || true)"
   echo "python -V      = $(python -V 2>&1 || true)"
   echo "which pip      = $(command -v pip || true)"
@@ -98,19 +93,21 @@ create_and_check () {
   echo "[Install] Upgrade pip (inside ${ENV_NAME})"
   python -m pip install --upgrade pip
 
-  echo "[Install] CPU-only Torch (small, stable)"
-  # Explicitly use CPU wheels to avoid pulling CUDA builds on login nodes.
+  echo "[Install] Force CPU-only Torch wheels (keeps env small on login nodes)"
+  # If a CUDA wheel is already present, remove it first to avoid mix-ups.
+  pip uninstall -y torch torchvision torchaudio >/dev/null 2>&1 || true
+  # Install CPU builds explicitly:
   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
   echo "[Install] cellpose==${CP_VER} (headless, no GUI extras)"
   pip install "cellpose==${CP_VER}"
 
   echo
-  echo "[Cellpose CLI version] (should print the version and platform info)"
+  echo "[Cellpose CLI version] (human-readable)"
   cellpose --version || echo "cellpose CLI not found"
 
   echo
-  echo "[Python probe] (Torch/CUDA and Cellpose via Python import)"
+  echo "[Python probe] (machine-readable JSON)"
   python - <<'PY'
 import sys, platform, json
 out = {"python": platform.python_version(), "exe": sys.executable}
@@ -126,17 +123,15 @@ try:
 except Exception as e:
     out["torch_error"] = str(e)
 
-# Cellpose version — try multiple ways so it never shows "unknown"
+# Cellpose version (two ways so it's robust)
 cp_ver = None
 try:
     import cellpose
     cp_ver = getattr(cellpose, "__version__", None)
 except Exception:
     pass
-
 if cp_ver is None:
     try:
-        # Python 3.8+: robust way to query installed package version
         from importlib.metadata import version
         cp_ver = version("cellpose")
     except Exception:
@@ -147,26 +142,29 @@ print(json.dumps(out, indent=2))
 PY
 
   echo "=== [DONE] ${ENV_NAME} ==="
-  # Deactivate so the next env starts clean
   conda deactivate || true
 }
 
-# 2) Create + verify both envs (CPU-first)
+# 3) Create + verify both envs (CPU-first)
 create_and_check "cellpose4" "4.0.7"
 create_and_check "cellpose3" "3.1.1.2"
 
 echo
 echo "=== COMPLETE ==="
-echo "What to expect on login/CPU nodes:"
-echo "  • 'cuda_available' will be FALSE — that's normal here."
-echo "  • Envs live under ~/.conda/envs/<envname> (your writable home)."
+echo "On login/CPU nodes:"
+echo "  • cuda_available will be FALSE (normal)."
+echo "  • Envs live in ~/.conda/envs/<envname> (your writable home)."
 echo
-echo "GPU testing later (interactive GPU shell, not now):"
+echo "GPU test later (interactive GPU shell):"
 echo "  srun --partition=gpu --gres=gpu:1 --cpus-per-task=4 --mem=16G --time=00:20:00 --pty bash"
 echo "  module purge && module load python3.10-anaconda/2023.03"
-echo "  # re-init conda activate, then:"
+echo "  # re-init conda activation with the same logic as above"
 echo "  conda activate cellpose4   # or cellpose3"
 echo "  pip uninstall -y torch torchvision"
-echo "  pip install torch torchvision --index-url https://download.pytorch.org/whl/cuXXX   # choose cu tag that matches 'nvidia-smi' Driver"
-echo "  python -c 'import torch; print(torch.__version__, torch.cuda.is_available())'"
-echo "=============================================================="
+echo "  # Pick a wheel that matches the GPU driver (nvidia-smi) — e.g. cu126 or cu128:"
+echo "  pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128"
+echo "  python - <<'PY'"
+echo "import torch; print('torch:', torch.__version__, '| cuda_available:', torch.cuda.is_available());"
+echo "print('device:' , torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none')"
+echo "PY"
+echo "================================================================"
