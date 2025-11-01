@@ -1,13 +1,8 @@
-# 🧠 GPU Environment & SLURM Basics — UMich ARC Great Lakes
+# 🧠 GPU Environment & SLURM Basics — UMich ARC Great Lakes (Updated)
 
-This README documents how to run **Cellpose with GPU acceleration** on the **UMich ARC Great Lakes** cluster.
+This README explains how to **test, verify, and run Cellpose with GPU acceleration** on the **UMich ARC Great Lakes** cluster using the updated scripts.
 
-It explains:
-
-- What happens when you request a GPU node  
-- How to use SLURM interactively or in batch mode  
-- The exact cluster Anaconda module to use  
-- How to create and verify two clean Cellpose environments (CPU → GPU)  
+It now includes the final working setup from your successful GPU tests (Tesla V100, CUDA 12.8, cu126 wheels).
 
 ---
 
@@ -31,19 +26,19 @@ srun --partition=gpu --gres=gpu:1 --cpus-per-task=4 --mem=16G --time=00:20:00 --
 | `--time=00:20:00` | Reserve the node for 20 minutes |
 | `--pty bash` | Start an *interactive shell* on the GPU node |
 
-Output you’ll see:
+Output example:
 ```
 srun: job queued and waiting for resources
 srun: job has been allocated resources
 ```
-That means SLURM found a GPU node and launched a new shell (for example `gl1016`).  
-Everything you run after this executes **on the GPU node**.
+This means SLURM found a GPU node (for example `gl1016` or `gl1021`) and launched a new shell there.  
+Everything you run after that executes **on the GPU node**, not on the login node.
 
 ---
 
-## 🧠 2. What happens on a GPU node
+## 🧠 2. Checking the GPU node
 
-Once your job starts, check:
+Once you’re on the GPU node:
 ```bash
 nvidia-smi
 ```
@@ -54,9 +49,10 @@ Driver Version: 570.124.06     CUDA Version: 12.8
 GPU Name: Tesla V100-PCIE-16GB
 ```
 
-- **Driver Version** → determines which CUDA wheels you can use  
-- **CUDA Version** → choose the right PyTorch tag (`cu128` for 12.8)  
-- **GPU Name** → confirms what hardware you got
+This tells you:
+- **Driver Version:** Determines which CUDA wheels can be used by PyTorch.
+- **CUDA Version:** For this example, CUDA 12.8 → PyTorch tag `cu126` (works perfectly).
+- **GPU Name:** The specific hardware you were allocated (here, Tesla V100).
 
 ---
 
@@ -77,90 +73,76 @@ else
 fi
 ```
 
-Now you can activate your environments:
+Now you can activate your Cellpose environments created from your CPU setup:
+
 ```bash
 conda activate cellpose4   # or cellpose3
 ```
 
 ---
 
-## 🧩 4. Minimal GPU configuration for Cellpose testing
+## 🧩 4. Minimal GPU configuration for Cellpose tests
 
 | Resource | Recommended | Why |
-|-----------|--------------|-----|
+|-----------|-------------|-----|
 | Partition | `gpu` | Required for CUDA |
 | GPUs | `--gres=gpu:1` | Cellpose uses one GPU |
-| CPUs | `--cpus-per-task=4` | Balanced data throughput |
-| Memory | `--mem=16G` | Fits most microscopy TIFFs |
-| Time | `--time=00:20:00` | Plenty for short tests |
-| Python | 3.10 | Matches cluster module |
-| Torch | `torch==2.9.0+cu128` | Compatible with CUDA 12.8 |
-| Cellpose | 4.0.7 or 3.1.1.2 | Versions under test |
-
-For heavier runs: increase `--time` and `--mem`, or use a batch script.
+| CPUs | `--cpus-per-task=4` | Reasonable balance for data loading |
+| Memory | `--mem=16G` | Enough for typical microscopy TIFFs |
+| Time | `--time=00:20:00` | Plenty for testing |
+| Python | 3.10 | Matches the Anaconda module |
+| Torch | `torch==2.9.0+cu126` | Works on CUDA 12.8 (forward compatible) |
+| Cellpose | 4.0.7 and 3.1.1.2 | Tested and verified GPU-ready |
 
 ---
 
-## 🧮 5. CUDA tag reference for PyTorch wheels
+## ✅ 5. Verifying GPU availability automatically
 
-| CUDA / Driver | PyTorch Tag | Example Command |
-|----------------|-------------|----------------|
-| CUDA 12.8 | `cu128` | `pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128` |
-| CUDA 12.6 | `cu126` | same pattern |
-| CUDA 12.1 | `cu121` | 〃 |
-| CUDA 11.8 | `cu118` | 〃 |
+Once on the GPU node, run the single one-click test script:
+```bash
+bash test_cellpose_gpu_envs.sh
+```
 
-Use the tag matching your `nvidia-smi` CUDA Version.
+This will:
+1. Detect your GPU’s CUDA version from `nvidia-smi`.
+2. Pick the correct PyTorch CUDA build tag (`cu126` for your node).
+3. Activate both `cellpose4` and `cellpose3`.
+4. Replace Torch with a matching CUDA build if needed.
+5. Print a clear JSON summary for each environment showing:
+   ```json
+   {
+     "torch": "2.9.0+cu126",
+     "cuda_available": true,
+     "device_0": "Tesla V100-PCIE-16GB"
+   }
+   ```
+
+If you see `cuda_available: true`, your environment is GPU-ready.
 
 ---
 
-## ✅ 6. Verify GPU access
+## 🔬 6. Running Cellpose with GPU
+
+From the same GPU session:
 
 ```bash
-python - <<'PY'
-import torch
-print("torch:", torch.__version__)
-print("cuda_available:", torch.cuda.is_available())
-if torch.cuda.is_available():
-    print("device:", torch.cuda.get_device_name(0))
-PY
-```
-
-Expected output on a GPU node:
-```
-torch: 2.9.0+cu128
-cuda_available: True
-device: Tesla V100-PCIE-16GB
-```
-
----
-
-## 🔬 7. Running Cellpose with GPU
-
-```bash
+conda activate cellpose4    # or cellpose3
 cellpose   --dir /path/to/images   --pretrained_model cyto3   --diameter 30   --save_tif   --use_gpu
 ```
 
-You should see:
+Expected log line:
 ```
 >>> using GPU (CUDA)
 ```
 
+You’ll find output mask files like `_cp_masks.tif` next to your input image.
+
 ---
 
-## 🧰 8. Common patterns
+## 🧰 7. Batch SLURM submission (optional)
 
-### Interactive (testing)
-```bash
-srun --partition=gpu --gres=gpu:1 --cpus-per-task=4 --mem=16G --time=00:20:00 --pty bash
-module load python3.10-anaconda/2023.03
-source /sw/pkgs/arc/python3.10-anaconda/2023.03/etc/profile.d/conda.sh
-conda activate cellpose4
-cellpose --use_gpu --dir ./ --pretrained_model cyto3 --diameter 30
-```
+If you want to run GPU jobs non-interactively, create a file `run_cellpose_gpu.slurm`:
 
-### Batch (reproducible jobs)
-`run_cellpose_gpu.slurm`:
 ```bash
 #!/bin/bash
 #SBATCH --job-name=cellpose_gpu
@@ -186,21 +168,22 @@ sbatch run_cellpose_gpu.slurm
 
 ---
 
-## 📂 Recommended files in this project
+## 📂 Project file summary
 
 | File | Purpose |
 |------|----------|
-| `create_and_test_cellpose_envs.sh` | CPU baseline env setup + verification |
-| `test_cellpose_gpu_env.sh` | GPU probe (must run on GPU node) |
-| `run_cellpose_gpu.slurm` | Example batch GPU job |
-| `README_GPU_SETUP.md` | This documentation |
+| `create_and_test_cellpose_envs.sh` | CPU environment creation and verification |
+| `test_cellpose_gpu_envs_v2.sh` | One-click GPU check and setup (this test) |
+| `run_cellpose_gpu.slurm` | Example GPU batch submission script |
+| `README_GPU_SETUP_v2.md` | This documentation |
 
 ---
 
 ## 🧭 Summary
 
-- **CPU login node:** safe place to build envs; no CUDA.  
-- **GPU node:** requested via SLURM; run CUDA tasks here.  
-- **Cellpose test:** 1 GPU, 4 CPUs, 16 GB RAM, 20 min wall time is ideal.  
-- **CUDA 12.8 driver ⇒ PyTorch wheel tag `cu128`.**  
-- Verified Cellpose 4.0.7 and 3.1.1.2 run correctly on both CPU and GPU.  
+- Both environments (`cellpose4` and `cellpose3`) now detect and use the GPU correctly.  
+- Great Lakes GPU nodes (CUDA 12.8, Tesla V100) run perfectly with Torch 2.9.0+cu126.  
+- You can safely use `--use_gpu` in either env for segmentation.  
+- For batch jobs, use the provided `run_cellpose_gpu.slurm` example.
+
+---
