@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
 # ============================================================================
 # test_and_configure_cellpose_gpu_envs.sh — Robust one‑click GPU check for Cellpose envs
+# PURPOSE
+#   To confirm that the existing Cellpose environments can use the cluster GPU
+#   and to make them CUDA-ready by installing the matching PyTorch wheel.
 #
 # WHAT THIS DOES
-#   • Assumes you're already on a GPU node (via: srun --partition=gpu ... --pty bash)
-#   • Loads the CLUSTER Anaconda module and enables `conda activate`
-#   • Detects CUDA version from nvidia-smi and maps it to a PyTorch wheel tag
-#   • For each env (cellpose4, cellpose3): installs matching CUDA torch & reports GPU
+#   • Assumes the two Cellpose environments already exist (cellpose4, cellpose3).
+#   • Runs ONLY on a GPU node (interactive session via srun ... --pty bash).
+#   • Loads the cluster’s Anaconda module and enables conda activation.
+#   • Detects the GPU’s CUDA version from `nvidia-smi`.
+#   • Chooses and installs the correct CUDA-enabled PyTorch wheel (e.g., cu126).
+#   • Verifies GPU detection (cuda_available: true) and prints Cellpose versions.
+#
+# WHAT THIS SCRIPT DOES NOT DO
+#   • It does NOT create environments or install Cellpose from scratch.
+#   • It does NOT run segmentation jobs — it only checks GPU readiness.
 #
 # HOW TO RUN
 #   1) srun --partition=gpu --gres=gpu:1 --cpus-per-task=4 --mem=16G --time=00:20:00 --pty bash
