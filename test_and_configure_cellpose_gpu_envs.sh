@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# test_cellpose_gpu_envs_v2.sh — Robust one‑click GPU check for Cellpose envs
+# test_and_configure_cellpose_gpu_envs.sh — Robust one‑click GPU check for Cellpose envs
 #
 # WHAT THIS DOES
 #   • Assumes you're already on a GPU node (via: srun --partition=gpu ... --pty bash)
@@ -10,7 +10,7 @@
 #
 # HOW TO RUN
 #   1) srun --partition=gpu --gres=gpu:1 --cpus-per-task=4 --mem=16G --time=00:20:00 --pty bash
-#   2) bash test_cellpose_gpu_envs_v2.sh
+#   2) bash test_and_configure_cellpose_gpu_envs.sh
 #
 # READOUT
 #   • Look for: "cuda_available: true" and a real GPU name (e.g., Tesla V100)

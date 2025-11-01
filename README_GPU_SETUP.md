@@ -100,7 +100,7 @@ conda activate cellpose4   # or cellpose3
 
 Once on the GPU node, run the single one-click test script:
 ```bash
-bash test_cellpose_gpu_envs.sh
+bash test_and_configure_cellpose_gpu_envs.sh
 ```
 
 This will:
