@@ -68,7 +68,7 @@ def main():
         "--chan", str(args.chan),
         "--save_tif", "--save_png", "--no_npy",
         "--use_gpu", "--verbose",
-        "--out_dir", str(out_dir),
+        "--savedir", str(out_dir),   # <- correct flag for output directory
     ]
 
     print("[CMD]", " ".join(cmd))
