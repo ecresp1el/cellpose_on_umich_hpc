@@ -9,7 +9,7 @@
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
+#SBATCH --mem=32G
 #SBATCH --time=00:30:00
 # Write logs to Turbo, NOT the repo:
 #SBATCH --output=/nfs/turbo/umms-parent/cellpose_gpu_test/logs/%x_%j.out
@@ -54,4 +54,10 @@ fi
 conda activate "${ENV_NAME}"
 
 # Run the Python wrapper
-python "${PY_RUNNER}"   --img_dir "${IMG_DIR}"   --out_dir "${OUT_DIR}"   --img_filter "${IMG_FILTER}"   --diameter "${DIAMETER}"   --flow_threshold "${FLOW_THRESHOLD}"   --min_size "${MIN_SIZE}"   --chan "${CHAN}"
+python "${PY_RUNNER}" \
+  --img_dir "${IMG_DIR}" \
+  --out_dir "${OUT_DIR}" \
+  --diameter "${DIAMETER}" \
+  --flow_threshold "${FLOW_THRESHOLD}" \
+  --min_size "${MIN_SIZE}" \
+  --chan "${CHAN}"
