@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
 """
 cp_compare.py — Run Cellpose from CLI with clear prints (no CSV), for SLURM wrappers.
+Moves all output files into the correct results/<COND>/<ENV_NAME> folder.
+
 See header comments in the SLURM file for how this integrates with your repo.
 """
-import argparse, os, sys, json, subprocess
+import argparse
+import os
+import sys
+import json
+import subprocess
+import shutil
+import glob
 from pathlib import Path
 
 def parse_args():
@@ -71,6 +79,33 @@ def main():
     if proc.returncode != 0:
         print(f"[ERROR] Cellpose exited with code {proc.returncode}", file=sys.stderr)
         sys.exit(proc.returncode)
+    
+    # --- Post-run gather: move any stray outputs from image folder into results folder ---
+    patterns = [
+        "*_seg.npy",
+        "*_flows.npy",
+        "*_cp_masks.tif",
+        "*_cp_outlines.png",
+    ]
+    moved = 0
+    for pattern in patterns:
+        for f in img_dir.glob(pattern):
+            target = out_dir / f.name
+            if target.exists():
+                stem, suf = f.stem, f.suffix
+                i = 1
+                while True:
+                    new_name = out_dir / f"{stem}__dup{i}{suf}"
+                    if not new_name.exists():
+                        target = new_name
+                        break
+                    i += 1
+            try:
+                shutil.move(str(f), str(target))
+                moved += 1
+            except Exception as e:
+                print(f"[WARN] could not move {f} -> {target}: {e}", flush=True)
+    print(f"[INFO] gathered {moved} file(s) into {out_dir}", flush=True)
 
     print("=== DONE ===", flush=True)
 
