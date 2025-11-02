@@ -19,7 +19,6 @@
 : "${TEST_ROOT:=/nfs/turbo/umms-parent/cellpose_gpu_test}"       # external test dataset (fixed location)
 : "${ENV_NAME:=cellpose4}"                                       # cellpose4 or cellpose3
 : "${COND:=WT}"                                                  # WT or KO
-: "${IMG_FILTER:=*.tif}"                                         # which files to include
 : "${DIAMETER:=1200}"                                            # expected organoid diameter (px)
 : "${FLOW_THRESHOLD:=0.7}"                                       # conservative to avoid over-splitting
 : "${MIN_SIZE:=100000}"                                          # filter debris (< this many pixels)
