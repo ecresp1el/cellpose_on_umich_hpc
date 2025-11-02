@@ -46,7 +46,7 @@ def main():
     print(f"Host          : {os.uname().nodename}")
     print(f"Python        : {sys.version.split()[0]}")
     print(f"Torch info    : {torch_info}")
-    print(f"Images        : {img_dir}  (filter: {args.img_filter})")
+    print(f"Images        : {img_dir}")
     print(f"Output        : {out_dir}")
     print(f"Diameter      : {args.diameter}")
     print(f"FlowThreshold : {args.flow_threshold}")
