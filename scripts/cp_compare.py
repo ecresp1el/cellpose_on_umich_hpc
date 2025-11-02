@@ -14,7 +14,6 @@ def main():
     p = argparse.ArgumentParser(description="Run Cellpose (CP3/CP4) with identical parameters to segment whole organoids.")
     p.add_argument("--img_dir", required=True, help="Folder with .tif images (e.g., /nfs/turbo/.../images/WT)")
     p.add_argument("--out_dir", required=True, help="Output folder (e.g., /nfs/turbo/.../results/WT/cp4)")
-    p.add_argument("--img_filter", default="*.tif", help="Glob filter for images (default: *.tif)")
     p.add_argument("--diameter", type=float, default=1200.0, help="Expected object diameter in pixels (≈1200)")
     p.add_argument("--flow_threshold", type=float, default=0.7, help="Higher = more conservative boundaries (0.6–0.8)")
     p.add_argument("--min_size", type=int, default=100000, help="Min object size in pixels to keep (filters debris)")
@@ -60,13 +59,12 @@ def main():
     cmd = [
         "cellpose",
         "--dir", str(img_dir),
-        "--img_filter", args.img_filter,
         "--pretrained_model", args.pretrained_model,
         "--diameter", str(args.diameter),
         "--flow_threshold", str(args.flow_threshold),
         "--min_size", str(args.min_size),
         "--chan", str(args.chan),
-        "--save_tif", "--save_png", "--no_npy",
+        "--save_tif", "--save_png", 
         "--use_gpu", "--verbose",
         "--savedir", str(out_dir),   # <- correct flag for output directory
     ]
