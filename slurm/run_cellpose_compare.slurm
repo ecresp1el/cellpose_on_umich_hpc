@@ -3,6 +3,7 @@
 # run_cellpose_compare.slurm  —  Compare Cellpose v3.1.1.2 vs v4.0.7 for whole-organoid masks
 #
 # This SLURM file lives IN your repo; logs & results live on TURBO (external).
+# It calls scripts/cp_compare.py and passes only parameters (no Python embedded).
 # ============================================================================
 #SBATCH --job-name=cp_compare
 #SBATCH --account=parent0
@@ -19,11 +20,21 @@
 : "${TEST_ROOT:=/nfs/turbo/umms-parent/cellpose_gpu_test}"       # external test dataset (fixed location)
 : "${ENV_NAME:=cellpose4}"                                       # cellpose4 or cellpose3
 : "${COND:=WT}"                                                  # WT or KO
+: "${MODEL:=}"                                                   # cpsam for CP4, cyto3 for CP3 (auto-set below if blank)
 : "${DIAMETER:=1200}"                                            # expected organoid diameter (px)
 : "${FLOW_THRESHOLD:=0.7}"                                       # conservative to avoid over-splitting
 : "${MIN_SIZE:=100000}"                                          # filter debris (< this many pixels)
 : "${CHAN:=0}"                                                   # grayscale / single-channel TIFFs
 # ----------------------------------------------------------------------------
+
+# Auto-pick model if not provided
+if [[ -z "$MODEL" ]]; then
+  if [[ "$ENV_NAME" == "cellpose3" ]]; then
+    MODEL="cyto3"
+  else
+    MODEL="cpsam"
+  fi
+fi
 
 REPO_ROOT="/home/elcrespo/Desktop/githubprojects/cellpose_on_umich_hpc"
 PY_RUNNER="${REPO_ROOT}/scripts/cp_compare.py"
@@ -40,6 +51,7 @@ echo "Python file : ${PY_RUNNER}"
 echo "Image dir   : ${IMG_DIR}"
 echo "Output dir  : ${OUT_DIR}"
 echo "Env         : ${ENV_NAME}"
+echo "Model       : ${MODEL}"
 echo "======================================"
 
 # Load cluster Anaconda & activate requested conda env
@@ -52,11 +64,5 @@ else
 fi
 conda activate "${ENV_NAME}"
 
-# Run the Python wrapper
-python "${PY_RUNNER}" \
-  --img_dir "${IMG_DIR}" \
-  --out_dir "${OUT_DIR}" \
-  --diameter "${DIAMETER}" \
-  --flow_threshold "${FLOW_THRESHOLD}" \
-  --min_size "${MIN_SIZE}" \
-  --chan "${CHAN}"
+# Run the Python wrapper (unbuffered so logs stream)
+python -u "${PY_RUNNER}"   --img_dir "${IMG_DIR}"   --out_dir "${OUT_DIR}"   --diameter "${DIAMETER}"   --flow_threshold "${FLOW_THRESHOLD}"   --min_size "${MIN_SIZE}"   --chan "${CHAN}"   --model "${MODEL}"
