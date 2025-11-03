@@ -1,7 +1,6 @@
 # CONTRACT — Methods & Staged Plan for Cellpose v3 Whole‑Organoid Pipeline
 
 **Repository:** `ecresp1el/cellpose_on_umich_hpc`  
-**Staging Reference:** `WHOLE_ORGANOID_STAGING_AND_FLOW.md` (authoritative directories)  
 **Model Family:** Cellpose **v3** (Python API) specialist model for *whole‑organoid* segmentation  
 **Contract Purpose:** This document is the canonical, method‑level contract. It defines **names**, **inputs/outputs**, **pre/postconditions**, **side‑effects**, **failure modes**, and **acceptance checks** for every method. It also lays out a **staged roadmap** with “Ready/Blocked” gates. All code, comments, and docstrings must adhere to this contract unless this file is version‑bumped and updated.
 
@@ -276,6 +275,7 @@ system:
 ## 5) Staged Roadmap & Acceptance Criteria
 
 ### Stage A — Config, Dataset, Bootstrap
+- **Status:** 🚧 IN PROGRESS
 - **Deliverables:** `ConfigStore`, `DatasetManager`, `RunLogger`, basic `WholeOrganoidExperiment.prepare()`  
 - **Acceptance:**  
   - Run dir created with `cfg/` files (snapshot/env/dataset_report)  
@@ -283,12 +283,14 @@ system:
   - No training/eval executed
 
 ### Stage B — Training (Native Scale)
+- **Status:** ☐ NOT READY
 - **Deliverables:** `TrainerCellpose3` + `WholeOrganoidExperiment.run_training()`  
 - **Acceptance:**  
   - Training completes on seed set; `rescale=False` and `bsize=512` logged  
   - `train/weights_final.pt`, `train/metrics.json`, `train/stdout_stderr.log` present
 
 ### Stage C — Evaluation & Artifacts
+- **Status:** ☐ NOT READY
 - **Deliverables:** `EvaluatorCellpose3`, `ArtifactWriter`, `QCReporter`, `WholeOrganoidExperiment.run_evaluation()`  
 - **Acceptance:**  
   - For each `valid` image, all artifact files exist with correct stems  
@@ -296,6 +298,7 @@ system:
   - `eval/eval_summary.json` aggregates counts/timings
 
 ### Stage D — Baselines & Re‑Eval
+- **Status:** ☐ NOT READY
 - **Deliverables:** baseline inference to `results/cp3_baseline_cyto3/`, threshold‑only re‑eval flow  
 - **Acceptance:**  
   - Baseline folder populated without training  
