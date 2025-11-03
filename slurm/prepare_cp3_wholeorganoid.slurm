@@ -73,6 +73,8 @@ conda activate "${ENV_NAME}"
 # Install PyYAML (adds YAML parser)
 pip install pyyaml
 # Verify
+# This script runs a Python one-liner to check if the PyYAML library is installed and prints its version.
+# Useful for verifying the PyYAML installation and version in the current environment.
 python -c "import yaml; print('PyYAML loaded:', yaml.__version__)"
 
 # ------------------------- Stage A: PREPARE run dir -------------------------
