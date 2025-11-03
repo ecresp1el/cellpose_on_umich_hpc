@@ -38,10 +38,10 @@ We do **not** split by WT/KO in this specialist project. The model should treat 
 /nfs/turbo/umms-parent/cellpose_wholeorganoid_model/
 ├─ dataset/
 │  ├─ images/               # ALL organoid .tif/.tiff from any condition (pooled)
-│  ├─ labels/               # (optional) any existing ground-truth masks
+│  ├─ labels/               # any existing ground-truth masks
 │  ├─ train/
 │  │   ├─ images/           # ~10–20 curated for first training
-│  │   └─ labels/
+│  │   └─ labels/           # ground truth masks
 │  └─ valid/
 │      ├─ images/           # small hold-out
 │      └─ labels/
