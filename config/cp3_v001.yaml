@@ -1,0 +1,39 @@
+model_name_out: cp3_v001
+
+paths:
+  turbo_root: /nfs/turbo/umms-parent/cellpose_wholeorganoid_model
+  data_images_train: /nfs/turbo/umms-parent/cellpose_wholeorganoid_model/dataset/train/images
+  data_labels_train: /nfs/turbo/umms-parent/cellpose_wholeorganoid_model/dataset/train/labels
+  data_images_valid: /nfs/turbo/umms-parent/cellpose_wholeorganoid_model/dataset/valid/images
+  data_labels_valid: /nfs/turbo/umms-parent/cellpose_wholeorganoid_model/dataset/valid/labels
+  results_root: /nfs/turbo/umms-parent/cellpose_wholeorganoid_model/results
+  logs_root: /nfs/turbo/umms-parent/cellpose_wholeorganoid_model/logs
+
+labels:
+  mask_filter: _seg.npy
+
+train:
+  use_pretrained: true
+  model_type: cyto3
+  n_epochs: 100
+  learning_rate: 1e-5
+  weight_decay: 0.1
+  batch_size: 1
+  rescale: false
+  bsize: 512
+
+eval:
+  niter: 2000
+  resample: false
+  bsize: 512
+  flow_threshold: 0.4
+  cellprob_threshold: 0.0
+  save_panels: true
+  save_rois: true
+  save_flows: true
+  save_prob: true
+  eval_split: valid
+
+system:
+  seed: 1337
+  use_cuda: true
