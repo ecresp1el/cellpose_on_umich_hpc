@@ -38,7 +38,7 @@ We do **not** split by WT/KO in this specialist project. The model should treat 
 /nfs/turbo/umms-parent/cellpose_wholeorganoid_model/
 ├─ dataset/
 │  ├─ images/               # ALL organoid .tif/.tiff from any condition (pooled)
-│  ├─ labels/               # any existing ground-truth masks
+│  ├─ labels/               # any existing ground-truth masks as pngs
 │  ├─ train/
 │  │   ├─ images/           # ~10–20 curated for first training
 │  │   └─ labels/           # ground truth masks
@@ -210,38 +210,6 @@ chmod +x ~/Desktop/rsync_wholeorganoid_to_turbo.sh
 
 ---
 
-## C) (Optional) Project manifest JSON
-
-Place this in your repo at `cellpose_on_umich_hpc/scripts/wholeorganoid_config.json` and tweak the `sources` array to match your Mac paths:
-
-```json
-{
-  "project": "cellpose_wholeorganoid_model",
-  "turbo_root": "/nfs/turbo/umms-parent/cellpose_wholeorganoid_model",
-  "purpose": "Specialist Cellpose v3 model for single whole-organoid segmentation; WT/KO pooled; rescaling off.",
-  "sources": [
-    "/Volumes/Manny4TBUM/10_16_2025/lhx6_pdch19_WTvsKO_projectfolder/cellprofilerandcellpose_folder/cellpose_multichannel_zcyx/PCDHvsLHX6_WTvsKO_IHC/max/WT",
-    "/Volumes/Manny4TBUM/10_16_2025/lhx6_pdch19_WTvsKO_IHC/max/KO",
-    "/Volumes/Manny4TBUM/10_13/NS116A/max/WT",
-    "/Volumes/Manny4TBUM/10_13/NS116A/KO"
-  ],
-  "model_plan": {
-    "family": "cellpose3",
-    "init": "cyto3",
-    "specialist": true,
-    "rescale": false,
-    "normalize": false,
-    "expected_objects_per_image": 1,
-    "diameter_px_typical": 1200,
-    "initial_training_n": 10,
-    "initial_validation_n": 2,
-    "notes": "HITL loop: annotate small seed → train → apply → inspect failures → add few → retrain."
-  },
-  "models": []
-}
-```
-
----
 
 ## ✅ Done: Staging Ready
 
