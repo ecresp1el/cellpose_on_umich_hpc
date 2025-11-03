@@ -70,6 +70,11 @@ else
 fi
 conda activate "${ENV_NAME}"
 
+# Install PyYAML (adds YAML parser)
+pip install pyyaml
+# Verify
+python -c "import yaml; print('PyYAML loaded:', yaml.__version__)"
+
 # ------------------------- Stage A: PREPARE run dir -------------------------
 # This calls the method-first entrypoint. It will:
 #   - Create results/<model>/run_YYYY-mm-dd_HHMMSS/
