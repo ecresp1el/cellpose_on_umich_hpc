@@ -235,9 +235,8 @@ class EvaluatorCellpose3:
             niter=args.niter,
             bsize=args.bsize,
             flow_threshold=getattr(args, "flow_threshold", None),
-            cellprob_threshold=getattr(args, "cellprob_threshold", None),
-            gpu=False                   # <--- Force CPU mode
-        )
+            cellprob_threshold=getattr(args, "cellprob_threshold", None)
+            )
 
         # Handle 3- or 4-tuple returns
         if not isinstance(out, tuple):
