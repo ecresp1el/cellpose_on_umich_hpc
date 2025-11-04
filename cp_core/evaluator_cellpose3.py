@@ -221,25 +221,25 @@ class EvaluatorCellpose3:
         return arr
 
     def _eval_single(self, model, img: "np.ndarray", args) -> Tuple["np.ndarray", Any, "np.ndarray"]:
-        """Run Cellpose v3 eval and return (masks, flows, cellprob).
+        """Run Cellpose v3 eval on CPU and return (masks, flows, cellprob).
 
-        Handles both (masks, flows, styles) and (masks, flows, styles, diams)
-        return signatures across CP 3.x; extracts the cellprob/logit map from
-        `flows` using tolerant key search; falls back to zeros if none present.
+        Compatible with both 3- and 4-return signatures:
+        (masks, flows, styles)  or  (masks, flows, styles, diams)
+        Extracts the logit map from `flows` regardless of key naming across versions.
         """
         out = model.eval(
-            img,  # CP 3.x accepts either array or list; we pass single image
+            img,                        # can be single array or list
             channels=args.channels,
             normalize=args.normalize,
-            rescale=args.resample,            # [CONTRACT] false → native grid
+            rescale=args.resample,      # [CONTRACT] false → native grid
             niter=args.niter,
             bsize=args.bsize,
-            # thresholds are used internally in CP for mask extraction
             flow_threshold=getattr(args, "flow_threshold", None),
             cellprob_threshold=getattr(args, "cellprob_threshold", None),
+            gpu=False                   # <--- Force CPU mode
         )
 
-        # CP 3.x can return 3-tuple or 4-tuple depending on code path/version
+        # Handle 3- or 4-tuple returns
         if not isinstance(out, tuple):
             raise RuntimeError(f"Unexpected eval() return type: {type(out)}")
         if len(out) == 4:
@@ -249,7 +249,7 @@ class EvaluatorCellpose3:
         else:
             raise RuntimeError(f"Unexpected number of values from eval(): {len(out)}")
 
-        # Extract cellprob/logits from flows (key name varies by CP version)
+        # Extract cellprob / logits robustly
         cellprob = None
         if isinstance(flows, dict):
             for k in ("cellprob", "p", "prob", "P"):
@@ -257,16 +257,13 @@ class EvaluatorCellpose3:
                     cellprob = flows[k]
                     break
         else:
-            # Some variants return a numpy array of shape (C,H,W); last/3rd chan can be prob
-            try:
-                import numpy as np
-                if hasattr(flows, "ndim") and flows.ndim >= 3 and flows.shape[0] >= 3:
-                    cellprob = flows[2].astype(np.float32, copy=False)
-            except Exception:
-                pass
+            # Some builds return an ndarray stack with prob as channel 2
+            import numpy as np
+            if hasattr(flows, "ndim") and flows.ndim >= 3 and flows.shape[0] >= 3:
+                cellprob = flows[2].astype(np.float32, copy=False)
 
+        # Fallback to zeros if nothing found
         if cellprob is None:
-            # Fallback: still return something usable; mask output will be saved, prob=0
             import numpy as np
             cellprob = np.zeros_like(masks, dtype=np.float32)
 
