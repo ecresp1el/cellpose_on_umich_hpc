@@ -82,9 +82,15 @@ def parse_args():
     )
     p.add_argument(
         "--mode",
-        choices=["prepare", "train", "full-train"],
+        choices=["prepare", "train", "full-train", "eval"],
         default="prepare",
         help="Workflow stage to execute.",
+    )
+    p.add_argument(
+        "--split",
+        default="valid",
+        choices=["valid", "all"],
+        help="Dataset split to evaluate (Stage C).",
     )
     p.add_argument(
         "--run_dir",
@@ -153,6 +159,21 @@ def main():
 
         exp.run_training()
         print(f"[Stage B] Trained specialist model in run directory: {exp.get_run_dir()}")
+        return
+    
+    if a.mode == "eval":
+        # If a specific run_dir is given, bind to that prepared run (with train/ artifacts)
+        if a.run_dir is not None:
+            rd = Path(a.run_dir)
+            cfg_snapshot = rd / "cfg" / "config_snapshot.yaml"
+            if not (rd.exists() and cfg_snapshot.exists()):
+                raise SystemExit(f"--run_dir is not a prepared run directory (missing {cfg_snapshot}).")
+            exp.run_dir = rd
+            exp.cfg_dir = rd / "cfg"
+            exp.logger = exp.logger.__class__(exp.run_dir)
+        # Now perform evaluation in exp.run_dir
+        exp.run_evaluation(split=a.split)
+        print(f"[Stage C] Evaluation complete in run directory: {exp.get_run_dir()}")
         return
 
 # -------------------------------------------------------------

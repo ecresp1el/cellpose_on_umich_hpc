@@ -197,6 +197,21 @@ class WholeOrganoidExperiment:
         """
         self.prepare()
         self.run_training()
+
+    def run_evaluation(self, split: str = "valid") -> None:
+        """Stage C: run inference and write artifacts per image.
+
+        Writes
+        ------
+        results/<model>/run_<ts>/eval/...
+        (masks, flows, prob, rois, panels, per-image JSON, eval_summary.json)
+        """
+        from .evaluator_cellpose3 import EvaluatorCellpose3
+        evaluator = EvaluatorCellpose3(self.cfg, self.run_dir)
+        args = evaluator.build_eval_args()
+        agg = evaluator.evaluate_images(split=split, args=args)
+        # Minimal console feedback
+        print(f"[Stage C] Wrote eval artifacts. Split={split}, images={agg['n_images']}")
         
     def get_run_dir(self) -> Path:
         """Return the absolute Path to the prepared run directory.
