@@ -83,11 +83,18 @@ class TrainerCellpose3:
     def load_model(self, use_pretrained: bool, model_type: Optional[str]):
         """Initialize a Cellpose model (cyto3 or scratch) for v3 API training."""
         assert models is not None, "cellpose.models not available in environment."
+        # Auto-detect CUDA; fall back to CPU cleanly if not available on the node/env
+        try:
+            import torch
+            use_gpu = torch.cuda.is_available()
+        except Exception:
+            use_gpu = False
+
         if use_pretrained:
             mt = model_type if model_type is not None else "cyto3"
-            model = models.CellposeModel(gpu=True, model_type=mt)
+            model = models.CellposeModel(gpu=use_gpu, model_type=mt)
         else:
-            model = models.CellposeModel(gpu=True, model_type=None)
+            model = models.CellposeModel(gpu=use_gpu, model_type=None)
         return model
 
     # -------------------- arg building --------------------
@@ -153,6 +160,8 @@ class TrainerCellpose3:
             Y.append(mask)
         return X, Y
 
+
+
     # -------------------- training --------------------
     def train(self, model, images: List[Path], labels: List[Path], args: TrainArgs) -> Dict[str, Any]:
         """Run Cellpose v3 training with enforced specialist settings."""
@@ -172,6 +181,7 @@ class TrainerCellpose3:
             normalize=args.normalize,
             bsize=args.bsize,
             batch_size=args.batch_size,
+            save_each=args.save_each,     # <-- add this line
             **(args.extra_kwargs or {}),
         )
         if args.learning_rate is not None:
@@ -180,6 +190,10 @@ class TrainerCellpose3:
             kwargs["weight_decay"] = args.weight_decay
 
         t0 = time.time()
+        
+        print("[Stage B] Starting training with args:",
+            {k: (v if k != "extra_kwargs" else "...") for k, v in asdict(args).items()})
+        
         train.train_seg(
             model.net,
             X_train, Y_train,
