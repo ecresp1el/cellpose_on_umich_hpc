@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """
-scripts/run_experiment.py — Stage A entrypoint
+scripts/run_experiment.py — Stage A+B entrypoint
 ------------------------------------------------
 Top-level CLI wrapper for the Cellpose3 Whole-Organoid pipeline.
 This script is intentionally thin — it just:
   1. Parses command-line arguments,
   2. Loads a validated Config object,
   3. Instantiates WholeOrganoidExperiment,
-  4. Executes the requested stage (Stage A: prepare).
+  4. Executes the requested stage:
+
+     - Stage A: `prepare`
+     - Stage B: `train` (resume into an existing prepared run)
+     - Stage B (Option A): `full-train` (prepare then train in one call)
 
 Usage examples
 --------------
@@ -16,11 +20,21 @@ python scripts/run_experiment.py \
     --config configs/cp3_v001.yaml \
     --mode prepare
 
+# Prepare + Train in one job (recommended Option A)
+python scripts/run_experiment.py \
+    --config configs/cp3_v001.yaml \
+    --mode full-train
+
+# Train only, resuming into an existing run directory
+python scripts/run_experiment.py \
+    --config configs/cp3_v001.yaml \
+    --mode train --run_dir /nfs/turbo/.../results/cp3_v001/run_YYYY-mm-dd_HHMMSS
+
 Notes
 -----
-* The same entrypoint will later dispatch to training (Stage B)
-  and evaluation (Stage C) once implemented.
-* `--mode prepare` is currently the only valid option.
+* `full-train` guarantees every training run has a fresh config/env snapshot
+  in the same run_dir before training starts.
+* `train` requires an existing run_dir that already contains cfg/config_snapshot.yaml.
 """
 from __future__ import annotations
 import argparse
@@ -48,9 +62,10 @@ def parse_args():
     Returns
     -------
     argparse.Namespace
-        Parsed arguments with fields:
+        Fields:
         - config : str  -> absolute or relative path to YAML config.
-        - mode   : str  -> workflow stage to run ("prepare" only for Stage A).
+        - mode   : str  -> workflow stage ("prepare" | "train" | "full-train").
+        - run_dir: str? -> required when mode == "train" (resume into prepared run).
 
     Raises
     ------
@@ -58,7 +73,7 @@ def parse_args():
         If required args are missing or invalid.
     """
     p = argparse.ArgumentParser(
-        description="Whole-Organoid Pipeline Entrypoint (Stage A)."
+        description="Whole-Organoid Pipeline Entrypoint (Stage A+B)."
     )
     p.add_argument(
         "--config",
@@ -67,53 +82,78 @@ def parse_args():
     )
     p.add_argument(
         "--mode",
-        choices=["prepare"],  # future: ["prepare","train","eval"]
+        choices=["prepare", "train", "full-train"],
         default="prepare",
-        help="Stage of the workflow to execute. Currently only 'prepare'.",
+        help="Workflow stage to execute.",
+    )
+    p.add_argument(
+        "--run_dir",
+        default=None,
+        help="Existing prepared run directory (required for --mode train).",
     )
     return p.parse_args()
 
 def main():
     """
-    Main CLI routine — orchestrates Stage A preparation.
+    Main CLI routine — orchestrates Stage A and Stage B.
 
     Flow
     ----
     1. Parse CLI args and load YAML config using ConfigStore.
     2. Instantiate WholeOrganoidExperiment with the validated config.
-    3. Run .prepare() to:
-         - create a timestamped run_dir,
-         - snapshot config/env,
-         - verify dataset structure,
-         - write reports under run_dir/cfg/.
-    4. Print the final run directory path to stdout.
+    3. Dispatch by mode:
+         - prepare: create run_dir, snapshot config/env, verify dataset.
+         - full-train: prepare() then run_training() in one call.
+         - train: resume into an existing run_dir (must contain cfg/).
+    4. Print the run directory path at completion.
 
     Writes
     ------
-    - results/<model_name>/run_YYYY-mm-dd_HHMMSS/cfg/*
-      (see contract for exact list)
+    - Stage A: results/<model>/run_<ts>/cfg/*
+    - Stage B: results/<model>/run_<ts>/train/*
 
     Notes
     -----
-    * All errors from config validation or dataset structure
-      propagate upward so that SLURM captures them in the .err file.
-    * Printing here is minimal by design — structured logs
-      are written inside WholeOrganoidExperiment.prepare().
+    * Errors propagate so SLURM captures them in .err.
+    * Printing is minimal — structured logs live in the run directory.
     """
-    # Parse command-line arguments
-    a = parse_args()
     
+    a = parse_args()
+
     # Load validated configuration (raises if YAML missing or malformed)
     cfg = ConfigStore.load_from_yaml(a.config)
-    
-    # Initialize experiment wrapper with config
-    exp = WholeOrganoidExperiment(cfg)
-    
-    # Execute Stage A preparation workflow
-    exp.prepare()
 
-    # Minimal console feedback (everything else logged in cfg/)
-    print(f"[Stage A] Prepared run directory: {exp.get_run_dir()}")
+    # Initialize experiment wrapper with config (creates a *new* run_dir on prepare/full-train)
+    exp = WholeOrganoidExperiment(cfg)
+
+    if a.mode == "prepare":
+        exp.prepare()
+        print(f"[Stage A] Prepared run directory: {exp.get_run_dir()}")
+        return
+
+    if a.mode == "full-train":
+        # Option A (recommended): always prepare a fresh run, then train into it
+        exp.run_full_train()
+        print(f"[Stage B] Trained specialist model in run directory: {exp.get_run_dir()}")
+        return
+
+    if a.mode == "train":
+        # Resume mode: require an existing run_dir with cfg/config_snapshot.yaml
+        if a.run_dir is None:
+            raise SystemExit("--mode train requires --run_dir (or use --mode full-train).")
+        rd = Path(a.run_dir)
+        cfg_snapshot = rd / "cfg" / "config_snapshot.yaml"
+        if not (rd.exists() and cfg_snapshot.exists()):
+            raise SystemExit(f"--run_dir is not a prepared run directory (missing {cfg_snapshot}).")
+
+        # Rebind the experiment to the supplied run_dir (no new prepare)
+        exp.run_dir = rd
+        exp.cfg_dir = rd / "cfg"
+        exp.logger = exp.logger.__class__(exp.run_dir)  # rebind logger to new run_dir
+
+        exp.run_training()
+        print(f"[Stage B] Trained specialist model in run directory: {exp.get_run_dir()}")
+        return
 
 # -------------------------------------------------------------
 # Standard Python entrypoint guard
