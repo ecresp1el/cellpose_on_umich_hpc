@@ -26,6 +26,7 @@ train:
   normalize: false
   min_train_masks: 0
   save_each: true
+  nimg_per_epoch: null        # keep null → Cellpose default
   extra_kwargs: {}              # passthrough to cellpose.train.train_seg
 
 eval:
