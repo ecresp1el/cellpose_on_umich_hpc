@@ -14,7 +14,8 @@ from typing import Optional, Dict, Any
 import os
 import sys
 import json
-
+# PyYAML is the canonical YAML parser we depend on for Stage A config loading.
+# We treat it as a hard requirement during runtime (see load_from_yaml guard).
 try:
     import yaml  # PyYAML
 except Exception as e:
@@ -24,18 +25,34 @@ except Exception as e:
 class Config:
     """Structured configuration (minimal Stage A subset).
 
-    Args:
-        model_name_out: Name/version for results folder (e.g., "cp3_v001").
-        paths: Mapping with required absolute directories.
-        labels: Mapping for label conventions (e.g., mask_filter).
-        train: Mapping for training knobs (Stage B).
-        eval: Mapping for evaluation knobs (Stage C).
-        system: Mapping for system options (seed, use_cuda).
+    Summary
+    -------
+    Lightweight container for the YAML-derived configuration used across
+    the pipeline. We keep nested sections as dicts for flexibility and to
+    avoid premature schema rigidity in Stage A.
 
-    Notes:
-        This dataclass is permissive (dicts for nested keys).
-        Stage A validates required path keys only.
+    Args
+    ----
+    model_name_out : str
+        Name/version for results folder (e.g., "cp3_v001").
+    paths : dict[str, Any]
+        Mapping with required absolute directories (see REQUIRED_PATH_KEYS).
+    labels : dict[str, Any]
+        Label conventions (e.g., `mask_filter: _cp_masks.png`).
+    train : dict[str, Any]
+        Training knobs (used in Stage B; included here for snapshotting).
+    eval : dict[str, Any]
+        Evaluation knobs (used in Stage C; included here for snapshotting).
+    system : dict[str, Any]
+        System options (e.g., seed, use_cuda) for reproducibility.
+
+    Notes
+    -----
+    * Stage A validates only the presence and existence of key paths.
+    * We snapshot the entire dict (incl. train/eval) for provenance even if
+      Stage A does not use them yet.
     """
+    
     model_name_out: str
     paths: Dict[str, Any]
     labels: Dict[str, Any]
