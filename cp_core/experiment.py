@@ -1,5 +1,5 @@
 """
-WholeOrganoidExperiment — Stage A
+WholeOrganoidExperiment — Stage A(+B wrapper)
 Prepare a timestamped run directory, validate dataset, and log environment.
 
 Purpose
@@ -9,11 +9,15 @@ Stage A orchestration wrapper. This class wires together:
   * Environment capture (for reproducibility),
   * Dataset discovery/validation (for quick feedback),
   * Creation of the run directory structure used by later stages.
+Also includes Stage B wrappers (`run_training`, `run_full_train`) that delegate
+to TrainerCellpose3 without embedding training logic here.
 
 Notes
 -----
 * Stage A is intentionally "shallow but decisive": we don't touch model code
   or images — we only prepare the ground truth for subsequent stages.
+* Stage B remains thin here: we assemble lists, capture console logs,
+  and save metadata; the trainer owns Cellpose calls.
 """
 
 from __future__ import annotations
@@ -28,12 +32,16 @@ from .logger import RunLogger
 from .trainer_cellpose3 import TrainerCellpose3
 
 class WholeOrganoidExperiment:
-    """Stage A orchestrator.
+    """Stage A orchestrator + Stage B wrapper.
 
     Methods
     -------
     prepare() -> None
         Create run_dir, save config snapshot, log env, verify dataset.
+    run_training() -> None
+        Stage B wrapper: assemble inputs, capture console, persist outputs.
+    run_full_train() -> None
+        Option A: prepare() then run_training() in one call.
     get_run_dir() -> Path
         Return the prepared run directory path.
 
@@ -42,7 +50,7 @@ class WholeOrganoidExperiment:
     * The timestamped `run_dir` makes every execution self-contained and
       immutable — later stages (training/eval) write under this directory.
     * This class remains thin and declarative; any heavy logic belongs to
-      specialized components (ConfigStore, DatasetManager, RunLogger, etc.).
+      specialized components (ConfigStore, DatasetManager, RunLogger, Trainer...).
     """
 
     def __init__(self, cfg: Config):
@@ -165,7 +173,7 @@ class WholeOrganoidExperiment:
             use_pretrained=bool(self.cfg.train.get("use_pretrained", True)),
             model_type=self.cfg.train.get("model_type", "cyto3"),
         )
-        args = trainer.build_train_args(self.cfg)
+        args = trainer.build_train_args(self.cfg) # [CONTRACT] rescale=False, bsize default 512
 
         # 3) capture training console → run/train/stdout_stderr.log
         log_file = self.run_dir / "train" / "stdout_stderr.log"
