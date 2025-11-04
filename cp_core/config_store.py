@@ -69,8 +69,17 @@ class ConfigStore:
         Load YAML into Config; validate required keys and directories.
     save_snapshot(dst_dir: Path, cfg: Config) -> None
         Write `config_snapshot.yaml` and `env_and_cfg.json` under dst_dir.
-    """
 
+    Design Notes
+    ------------
+    * This class centralizes all config I/O so other components can assume
+      they receive a validated `Config`.
+    * Validation is intentionally “shallow but decisive” in Stage A:
+      we assert directory existence for containers and absoluteness for paths.
+    """
+    
+    # Paths that must exist in the YAML (under `paths:`) and (for containers)
+    # must exist on disk. Images themselves may be empty early on.
     REQUIRED_PATH_KEYS = [
         "turbo_root",
         "data_images_train",
@@ -85,47 +94,75 @@ class ConfigStore:
     def load_from_yaml(path: str) -> Config:
         """Load YAML configuration and validate directory paths.
 
-        Args:
-            path: Path to YAML file.
+        Summary
+        -------
+        Reads the YAML file, checks presence of top-level keys and required
+        path entries, ensures absolute paths, and verifies the existence of
+        container directories (turbo_root, results_root, logs_root).
 
-        Returns:
-            Config: validated configuration object.
+        Args
+        ----
+        path : str
+            Path to YAML file.
 
-        Writes:
-            None
+        Returns
+        -------
+        Config
+            Validated configuration object.
 
-        Raises:
-            FileNotFoundError: if YAML path does not exist.
-            RuntimeError: if PyYAML is unavailable.
-            ValueError: if required keys/dirs are missing.
+        Writes
+        ------
+        None
+
+        Raises
+        ------
+        FileNotFoundError
+            If the YAML path does not exist.
+        RuntimeError
+            If PyYAML is unavailable in the active environment.
+        ValueError
+            If required keys or required directories are missing.
+
+        Checks
+        ------
+        * Top-level keys exist: model_name_out, paths, labels, train, eval, system
+        * All REQUIRED_PATH_KEYS present under `paths:`
+        * All `paths.*` are absolute; containers exist for turbo_root/results_root/logs_root
         """
         p = Path(path)
         if not p.exists():
+            # Fail fast with a clear error so SLURM logs point to the actual cause.
             raise FileNotFoundError(f"Config YAML not found: {p}")
         if yaml is None:
+            # Stage A requires PyYAML; installing in the job is acceptable,
+            # but we prefer having it present in the env beforehand.
             raise RuntimeError("PyYAML is required. Please `pip install pyyaml`.")
 
         with p.open("r") as f:
             data = yaml.safe_load(f)
 
-        # Basic shape checks
+        # Basic shape checks: keep these consistent with the contract.
         for key in ["model_name_out", "paths", "labels", "train", "eval", "system"]:
             if key not in data:
                 raise ValueError(f"Missing top-level key in config YAML: '{key}'")
 
-        # Validate required path keys exist and are absolute directories
+        # Validate required path keys exist and are absolute directories.
         paths = data["paths"]
         for k in ConfigStore.REQUIRED_PATH_KEYS:
             if k not in paths:
                 raise ValueError(f"Missing 'paths.{k}' in config YAML.")
+            
+            # Enforce absolute paths so jobs are location-agnostic and safer on HPC.
             if not Path(paths[k]).is_absolute():
                 raise ValueError(f"'paths.{k}' must be absolute: {paths[k]}")
+            
             # For Stage A, only ensure parent directories exist; images may be empty early on
             # We assert existence for the top-level containers.
             container_keys = ["turbo_root", "results_root", "logs_root"]
             if k in container_keys and not Path(paths[k]).exists():
                 raise ValueError(f"Directory does not exist: paths.{k} -> {paths[k]}")
 
+        # Construct the Config; keep nested dicts intact for snapshotting.
         cfg = Config(
             model_name_out=data["model_name_out"],
             paths=data["paths"],
@@ -140,20 +177,39 @@ class ConfigStore:
     def save_snapshot(dst_dir: Path, cfg: Config) -> None:
         """Persist config snapshot and environment metadata under dst_dir.
 
-        Args:
-            dst_dir: Directory to write snapshot files.
-            cfg: Config object to serialize.
+        Summary
+        -------
+        Writes two files into `dst_dir` for strong provenance:
+        1) `config_snapshot.yaml` — the effective configuration used.
+        2) `env_and_cfg.json`   — Python/SLURM environment + same config dict.
 
-        Writes:
-            - `dst_dir/config_snapshot.yaml`
-            - `dst_dir/env_and_cfg.json`
+        Args
+        ----
+        dst_dir : pathlib.Path
+            Directory to write snapshot files into (created if missing).
+        cfg : Config
+            Config object to serialize.
 
-        Raises:
-            OSError: on IO errors.
+        Writes
+        ------
+        dst_dir/config_snapshot.yaml
+        dst_dir/env_and_cfg.json
+
+        Raises
+        ------
+        OSError
+            On I/O errors (e.g., permission issues).
+
+        Notes
+        -----
+        * If PyYAML is unavailable, we still write the snapshot as JSON text
+          (so runs are never blocked from recording provenance).
+        * We include an `environ_subset` focused on SLURM and core HPC vars
+          to keep the JSON readable yet useful for auditing.
         """
         dst_dir.mkdir(parents=True, exist_ok=True)
 
-        # Re-dump YAML using json->yaml if PyYAML present
+        # Prepare a serializable view of the config.
         cfg_yaml = {
             "model_name_out": cfg.model_name_out,
             "paths": cfg.paths,
@@ -163,13 +219,14 @@ class ConfigStore:
             "system": cfg.system,
         }
 
+        # Prefer YAML for human readability, fall back to JSON if PyYAML is missing.
         if yaml is not None:
             (dst_dir / "config_snapshot.yaml").write_text(yaml.safe_dump(cfg_yaml, sort_keys=False))
         else:
             # Fallback JSON if PyYAML not present
             (dst_dir / "config_snapshot.yaml").write_text(json.dumps(cfg_yaml, indent=2))
-
-        # Env metadata
+        
+        # Environment + config echo for reproducibility audits.    
         env_meta = {
             "python_version": sys.version,
             "executable": sys.executable,
