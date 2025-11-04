@@ -375,7 +375,9 @@ class EvaluatorCellpose3:
         f_mask = self.d_masks / f"{stem}_masks.tif"
         _imsave_tif(f_mask, m_u16)
         written["masks"] = str(f_mask)
-        n_masks = int(m_u16.max())                      # #instances for logs/titles
+        n_masks = int(m_u16.max())
+        
+        print(f"[Stage C][{stem}] saved masks: {f_mask}", flush=True)# #instances for logs/titles
 
         # -------------------- 2) FLOWS (raw dP + magnitude viz) --------------------
         if args.save_flows:
@@ -401,18 +403,22 @@ class EvaluatorCellpose3:
                 _imsave_tif(f_flow_tif, mag)
                 written["flows_npy"] = str(f_flow_npy)
                 written["flows_tif"] = str(f_flow_tif)
+                
+                print(f"[Stage C][{stem}] saved flows: {f_flow_npy}, {f_flow_tif}", flush=True)
 
         # -------------------- 3) PROBABILITIES (logits + view) --------------------
         if args.save_prob:
             f_prob = self.d_prob / f"{stem}_prob.tif"
             _imsave_tif(f_prob, cellprob.astype(np.float32))     # raw logits, do NOT sigmoid
             written["prob_tif"] = str(f_prob)
+            print(f"[Stage C][{stem}] saved prob: {f_prob}", flush=True)
 
         if args.save_prob_view:
             f_probv = self.d_prob / f"{stem}_prob_view.tif"
             prob_view = _sigmoid(cellprob.astype(np.float32))    # human-friendly view
             _imsave_tif(f_probv, prob_view)
             written["prob_view_tif"] = str(f_probv)
+            print(f"[Stage C][{stem}] saved prob_view: {f_probv}", flush=True)
 
         # -------------------- 4) ROIs (ImageJ archive) --------------------
         if args.save_rois and cp_io is not None and hasattr(cp_io, "save_rois"):
@@ -420,12 +426,13 @@ class EvaluatorCellpose3:
             base = (self.d_rois / stem).with_suffix("")
             cp_io.save_rois(m_u16, str(base))
             written["rois_zip"] = str(base) + ".zip"
+            print(f"[Stage C][{stem}] saved rois: {written['rois_zip']}", flush=True)
 
         # -------- 1×4 Panel (input | prob | flow viz | overlay) --------
         if args.save_panels:
             f_panel = self.d_panels / f"{stem}_panel_1x4.png"
             try:
-                # Always build a panel, even if cp_plot is unavailable or flows are missing
+                # Always build a panel and save it, regardless of flows/cp_plot status
                 import matplotlib
                 matplotlib.use("Agg")  # headless on HPC
                 import matplotlib.pyplot as plt
@@ -433,16 +440,17 @@ class EvaluatorCellpose3:
                 fig, axs = plt.subplots(1, 4, figsize=(16, 4))
 
                 # (1) input (contrast-limited)
-                axs[0].imshow(self._auto_contrast(image), cmap="gray")
+                im0 = self._auto_contrast(image)
+                axs[0].imshow(im0, cmap="gray")
                 axs[0].set_title("input")
                 axs[0].axis("off")
 
-                # (2) prob (logit) — raw logits, not sigmoid (view _prob_view.tif for sigmoid)
+                # (2) prob (logit) - plot as-is; it's fine if scale is wide
                 axs[1].imshow(cellprob, cmap="gray")
                 axs[1].set_title("prob (logit)")
                 axs[1].axis("off")
 
-                # (3) flow magnitude — try dict first, then ndarray stack; otherwise leave blank
+                # (3) flow magnitude - robust to dict / ndarray / list
                 mag = None
                 _flows = flows[0] if isinstance(flows, (list, tuple)) else flows
                 if isinstance(_flows, dict) and isinstance(_flows.get("dP", None), np.ndarray):
@@ -454,30 +462,31 @@ class EvaluatorCellpose3:
                     mag = np.sqrt(dP[0] ** 2 + dP[1] ** 2)
                 if mag is not None:
                     axs[2].imshow(mag, cmap="gray")
+                else:
+                    # show a blank panel with a hint
+                    axs[2].imshow(np.zeros(im0.shape[:2], dtype=np.float32), cmap="gray")
                 axs[2].set_title("flow mag")
                 axs[2].axis("off")
 
-                # (4) overlay — prefer cp_plot; otherwise simple boundary overlay
+                # (4) overlay - try Cellpose helper; fall back to boundary contour
                 overlay_title = f"overlay (n={n_masks})"
-                overlay_drawn = False
+                drawn = False
                 try:
                     if cp_plot is not None and hasattr(cp_plot, "show_segmentation"):
                         flows_for_plot = _flows if isinstance(_flows, dict) else None
                         cp_plot.show_segmentation(
-                            image,
-                            masks,
-                            flows_for_plot,
+                            image, masks, flows_for_plot,
                             channels=self.cfg.eval.get("channels", [0, 0]),
-                            ax=axs[3],
+                            ax=axs[3]
                         )
-                        overlay_drawn = True
+                        drawn = True
                 except Exception:
-                    overlay_drawn = False
+                    drawn = False
 
-                if not overlay_drawn:
-                    # Fallback: draw mask boundaries even if there are zero masks (will just show input)
+                if not drawn:
                     bnd = self._boundary_from_labels(m_u16)
-                    axs[3].imshow(self._auto_contrast(image), cmap="gray")
+                    axs[3].imshow(im0, cmap="gray")
+                    # Only draw contour if there is at least one boundary pixel
                     if bnd.any():
                         axs[3].contour(bnd, colors="r", linewidths=0.5)
                 axs[3].set_title(overlay_title)
@@ -487,24 +496,25 @@ class EvaluatorCellpose3:
                 fig.savefig(str(f_panel), dpi=200)
                 plt.close(fig)
                 written["panel_png"] = str(f_panel)
-
+                print(f"[Stage C][{stem}] saved panel: {f_panel}", flush=True)
             except Exception as e:
-                # Panel is best-effort; never block the pipeline. Try a minimal fallback.
+                # Minimal fallback: always write at least a single-frame input preview
                 try:
                     import matplotlib
                     matplotlib.use("Agg")
                     import matplotlib.pyplot as plt
-                    fig, axs = plt.subplots(1, 1, figsize=(4, 4))
-                    axs.imshow(self._auto_contrast(image), cmap="gray")
-                    axs.set_title(f"input (panel fallback, n={n_masks})")
-                    axs.axis("off")
+                    fig, ax = plt.subplots(1, 1, figsize=(4, 4))
+                    ax.imshow(self._auto_contrast(image), cmap="gray")
+                    ax.set_title(f"input (fallback, n={n_masks})")
+                    ax.axis("off")
                     fig.tight_layout()
                     fig.savefig(str(f_panel), dpi=200)
                     plt.close(fig)
                     written["panel_png"] = str(f_panel)
-                except Exception:
-                    # If even minimal fallback fails, skip silently but don't crash Stage C
-                    pass
+                    print(f"[Stage C][{stem}] saved minimal panel (fallback): {f_panel}", flush=True)
+                except Exception as ee:
+                    print(f"[Stage C][{stem}] panel save failed: {ee}", flush=True)
+
         # -------------------- 6) JSON SUMMARY --------------------
         f_json = self.d_json / f"{stem}_summary.json"
         f_json.write_text(json.dumps({
