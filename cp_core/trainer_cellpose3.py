@@ -63,6 +63,7 @@ class TrainArgs:
     learning_rate: Optional[float] = None
     weight_decay: Optional[float] = None
     save_each: bool = False
+    nimg_per_epoch: Optional[int] = None
     extra_kwargs: Dict[str, Any] | None = None
 
 
@@ -112,6 +113,8 @@ class TrainerCellpose3:
         wd = t.get("weight_decay", None)
         save_each = t.get("save_each", False)
         extra = t.get("extra_kwargs", {}) or {}
+        nimg_per_epoch = t.get("nimg_per_epoch", None)   # <-- add this
+
 
         # invariants
         if t.get("rescale", False) is not False:
@@ -131,6 +134,7 @@ class TrainerCellpose3:
             learning_rate=(float(lr) if lr is not None else None),
             weight_decay=(float(wd) if wd is not None else None),
             save_each=bool(save_each),
+            nimg_per_epoch=(int(nimg_per_epoch) if nimg_per_epoch is not None else None),
             extra_kwargs=extra,
         )
 
@@ -181,16 +185,22 @@ class TrainerCellpose3:
             normalize=args.normalize,
             bsize=args.bsize,
             batch_size=args.batch_size,
-            save_each=args.save_each,     # <-- add this line
+            save_each=args.save_each,  
             **(args.extra_kwargs or {}),
         )
         if args.learning_rate is not None:
             kwargs["learning_rate"] = args.learning_rate
         if args.weight_decay is not None:
             kwargs["weight_decay"] = args.weight_decay
+        if args.nimg_per_epoch is not None:       # <-- add this block
+            kwargs["nimg_per_epoch"] = args.nimg_per_epoch
 
         t0 = time.time()
         
+        # Enable Cellpose logger so you get [INFO]/[WARNING] lines
+        if cp_io is not None and hasattr(cp_io, "logger_setup"):
+            cp_io.logger_setup()
+            
         print("[Stage B] Starting training with args:",
             {k: (v if k != "extra_kwargs" else "...") for k, v in asdict(args).items()})
         
