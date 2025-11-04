@@ -208,16 +208,26 @@ class EvaluatorCellpose3:
 
     # -------------------- helpers --------------------
     def _read_image(self, path: Path) -> np.ndarray:
+        """Read an image and return either (H, W) or (H, W, C).
+
+        Cellpose expects grayscale (H,W) or channel-last color (H,W,C).
+        Some of your TIFFs load as channel-first (C,H,W); we move channels last.
+        """
         if cp_io is not None and hasattr(cp_io, "imread"):
             arr = cp_io.imread(str(path))
         else:
-            try:
-                import imageio
-                arr = imageio.imread(str(path))
-            except Exception as e:
-                raise RuntimeError(f"Failed to read image: {path}") from e
+            import imageio
+            arr = imageio.imread(str(path))
+
+        # (H, W, 1) → (H, W)
         if getattr(arr, "ndim", 2) == 3 and arr.shape[-1] == 1:
             arr = arr[..., 0]
+
+        # (C, H, W) → (H, W, C)
+        if getattr(arr, "ndim", 2) == 3 and arr.shape[0] in (2, 3, 4) and arr.shape[-1] not in (2, 3, 4):
+            import numpy as np
+            arr = np.moveaxis(arr, 0, -1)
+
         return arr
 
     def _eval_single(self, model, img: "np.ndarray", args) -> Tuple["np.ndarray", Any, "np.ndarray"]:
