@@ -13,14 +13,20 @@ labels:
   mask_filter: _cp_masks.png
 
 train:
-  use_pretrained: true
-  model_type: cyto3
-  n_epochs: 100
-  learning_rate: 1e-5
-  weight_decay: 0.1
-  batch_size: 1
-  rescale: false
+  use_pretrained: true          # cyto3 fine-tune by default
+  model_type: cyto3             # or null for scratch
+  rescale: false                # specialist policy
+  diameter: 1350                # enforced default (px)
   bsize: 512
+  n_epochs: 100
+  batch_size: 1
+  learning_rate: null # ← omit -> use Cellpose default 
+  weight_decay: null # ← omit -> use Cellpose default
+  channels: [0, 0]
+  normalize: false
+  min_train_masks: 0
+  save_each: false
+  extra_kwargs: {}              # passthrough to cellpose.train.train_seg
 
 eval:
   niter: 2000
@@ -28,11 +34,16 @@ eval:
   bsize: 512
   flow_threshold: 0.4
   cellprob_threshold: 0.0
+  diameter: null                # keep null → native grid
+  channels: [0, 0]
+  normalize: false
   save_panels: true
   save_rois: true
   save_flows: true
   save_prob: true
+  save_prob_view: true          # NEW: sigmoid view for human QA
   eval_split: valid
+  extra_kwargs: {}
 
 system:
   seed: 1337
