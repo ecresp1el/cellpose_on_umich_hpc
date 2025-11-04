@@ -221,24 +221,25 @@ class EvaluatorCellpose3:
         return arr
 
     def _eval_single(self, model, img: "np.ndarray", args) -> Tuple["np.ndarray", Any, "np.ndarray"]:
-        """Run Cellpose v3 eval on CPU and return (masks, flows, cellprob).
+        """Run Cellpose v3 eval and return (masks, flows, cellprob).
 
         Compatible with both 3- and 4-return signatures:
         (masks, flows, styles)  or  (masks, flows, styles, diams)
-        Extracts the logit map from `flows` regardless of key naming across versions.
+        Extracts the logit/log-prob map from `flows` regardless of key naming across versions.
+        CPU/GPU selection is handled when the model is constructed (load_model).
         """
         out = model.eval(
-            img,                        # can be single array or list
+            img,                                 # CP accepts array or list for a single image
             channels=args.channels,
             normalize=args.normalize,
-            rescale=None,      # [CONTRACT] false → native grid
+            rescale=None,                        # no input scaling; keep native grid
             niter=args.niter,
             bsize=args.bsize,
             flow_threshold=getattr(args, "flow_threshold", None),
-            cellprob_threshold=getattr(args, "cellprob_threshold", None)
-            )
+            cellprob_threshold=getattr(args, "cellprob_threshold", None),
+        )
 
-        # Handle 3- or 4-tuple returns
+        # Accept both 3- and 4-tuple returns
         if not isinstance(out, tuple):
             raise RuntimeError(f"Unexpected eval() return type: {type(out)}")
         if len(out) == 4:
@@ -248,7 +249,13 @@ class EvaluatorCellpose3:
         else:
             raise RuntimeError(f"Unexpected number of values from eval(): {len(out)}")
 
-        # Extract cellprob / logits robustly
+        # Some CP builds return lists (one entry per image); unwrap
+        if isinstance(masks, (list, tuple)):
+            masks = masks[0]
+        if isinstance(flows, (list, tuple)):
+            flows = flows[0]
+
+        # Robust extraction of the cellprob/logit map from `flows`
         cellprob = None
         if isinstance(flows, dict):
             for k in ("cellprob", "p", "prob", "P"):
@@ -256,34 +263,41 @@ class EvaluatorCellpose3:
                     cellprob = flows[k]
                     break
         else:
-            # Some builds return an ndarray stack with prob as channel 2
-            import numpy as np
+            # Some variants return a numpy stack (C,H,W); channel 2 is often prob
             if hasattr(flows, "ndim") and flows.ndim >= 3 and flows.shape[0] >= 3:
                 cellprob = flows[2].astype(np.float32, copy=False)
 
-        # Fallback to zeros if nothing found
+        # Safe fallback: zero logits so downstream saves/panels still work
         if cellprob is None:
-            import numpy as np
             cellprob = np.zeros_like(masks, dtype=np.float32)
 
         return masks, flows, cellprob
 
     def _save_artifacts(self, ip: Path, image: np.ndarray, masks: np.ndarray,
-                        flows: Dict[str, Any], cellprob: np.ndarray, args: EvalArgs) -> Dict[str, str]:
+                        flows: Any, cellprob: np.ndarray, args: EvalArgs) -> Dict[str, str]:
         """Write masks/flows/prob/rois/panel + JSON summary for one image."""
         stem = ip.stem
 
         # Masks (uint16)
-        if args.save_prob or args.save_panels or args.save_rois or True:
-            m_u16 = _to_uint16_labels(masks)
-            f_mask = self.d_masks / f"{stem}_masks.tif"
-            _imsave_tif(f_mask, m_u16)
+        m_u16 = _to_uint16_labels(masks)
+        f_mask = self.d_masks / f"{stem}_masks.tif"
+        _imsave_tif(f_mask, m_u16)
+        written: Dict[str, str] = {"masks": str(f_mask)}
 
-        # Flows (raw + a simple magnitude viz)
-        written = {"masks": str(f_mask)}
+        # -------- Flows (raw + magnitude viz) --------
         if args.save_flows:
-            dP = flows.get("dP", None)   # shape (2,H,W) = (dy,dx)
-            if dP is not None and isinstance(dP, np.ndarray):
+            # Normalize flows structure: dict (preferred) or ndarray stack
+            if isinstance(flows, (list, tuple)):
+                flows = flows[0]
+
+            dP = None  # (2,H,W) = (dy, dx)
+            if isinstance(flows, dict):
+                dP = flows.get("dP", None)
+            else:
+                if hasattr(flows, "ndim") and flows.ndim >= 3 and flows.shape[0] >= 2:
+                    dP = flows[:2]
+
+            if isinstance(dP, np.ndarray) and dP.ndim == 3 and dP.shape[0] == 2:
                 f_flow_npy = self.d_flows / f"{stem}_flows.npy"
                 f_flow_tif = self.d_flows / f"{stem}_flows.tif"
                 np.save(str(f_flow_npy), dP)
@@ -293,7 +307,7 @@ class EvaluatorCellpose3:
                 written["flows_npy"] = str(f_flow_npy)
                 written["flows_tif"] = str(f_flow_tif)
 
-        # Probabilities (logits + view)
+        # -------- Probabilities (logits + view) --------
         if args.save_prob:
             f_prob = self.d_prob / f"{stem}_prob.tif"
             _imsave_tif(f_prob, cellprob.astype(np.float32))
@@ -305,13 +319,13 @@ class EvaluatorCellpose3:
             _imsave_tif(f_probv, prob_view)
             written["prob_view_tif"] = str(f_probv)
 
-        # ROIs (ImageJ archive)
+        # -------- ROIs (ImageJ archive) --------
         if args.save_rois and cp_io is not None and hasattr(cp_io, "save_rois"):
             base = (self.d_rois / stem).with_suffix("")  # CP appends .zip
             cp_io.save_rois(m_u16, str(base))
             written["rois_zip"] = str(base) + ".zip"
 
-        # 1×4 Panel (input | prob | flow viz | overlay) using CP plot when available
+        # -------- 1×4 Panel (input | prob | flow viz | overlay) --------
         if args.save_panels:
             try:
                 if cp_plot is not None and hasattr(cp_plot, "show_segmentation"):
@@ -322,35 +336,49 @@ class EvaluatorCellpose3:
                     import matplotlib.pyplot as plt
 
                     fig, axs = plt.subplots(1, 4, figsize=(16, 4))
+
                     # 1) input (contrast-limited)
                     axs[0].imshow(self._auto_contrast(image), cmap="gray")
                     axs[0].set_title("input"); axs[0].axis("off")
+
                     # 2) prob (logit)
-                    im1 = axs[1].imshow(cellprob, cmap="gray")
+                    axs[1].imshow(cellprob, cmap="gray")
                     axs[1].set_title("prob (logit)"); axs[1].axis("off")
-                    # 3) flow magnitude
-                    if "dP" in flows and isinstance(flows["dP"], np.ndarray):
+
+                    # 3) flow magnitude (if available)
+                    mag = None
+                    # Try dict path first
+                    if isinstance(flows, dict) and isinstance(flows.get("dP", None), np.ndarray):
                         dP = flows["dP"]
                         mag = np.sqrt(dP[0]**2 + dP[1]**2)
+                    # Fall back to ndarray stack
+                    elif hasattr(flows, "ndim") and flows.ndim >= 3 and flows.shape[0] >= 2:
+                        dP = flows[:2]
+                        mag = np.sqrt(dP[0]**2 + dP[1]**2)
+                    if mag is not None:
                         axs[2].imshow(mag, cmap="gray")
                     axs[2].set_title("flow mag"); axs[2].axis("off")
-                    # 4) overlay (CP utility)
+
+                    # 4) overlay (CP utility if possible, else simple boundary)
                     try:
-                        cp_plot.show_segmentation(image, masks, flows, channels=self.cfg.eval.get("channels",[0,0]), ax=axs[3])
-                        axs[3].set_title("overlay"); axs[3].axis("off")
+                        cp_plot.show_segmentation(
+                            image, masks, flows if isinstance(flows, dict) else None,
+                            channels=self.cfg.eval.get("channels", [0, 0]), ax=axs[3]
+                        )
+                        axs[3].set_title("overlay")
                     except Exception:
-                        # fallback: simple boundary overlay
                         bnd = self._boundary_from_labels(m_u16)
                         axs[3].imshow(self._auto_contrast(image), cmap="gray")
                         axs[3].contour(bnd, colors="r", linewidths=0.5)
-                        axs[3].set_title("overlay"); axs[3].axis("off")
+                        axs[3].set_title("overlay")
+                    axs[3].axis("off")
 
                     fig.tight_layout()
                     fig.savefig(str(f_panel), dpi=200)
                     plt.close(fig)
                     written["panel_png"] = str(f_panel)
             except Exception:
-                # panel is best-effort; keep going
+                # Panel is best-effort; keep going
                 pass
 
         # Per-image JSON summary
@@ -368,7 +396,6 @@ class EvaluatorCellpose3:
         }, indent=2))
         written["summary_json"] = str(f_json)
         return written
-
     # ---------- small image utilities ----------
     @staticmethod
     def _auto_contrast(img: np.ndarray, p_low=2.0, p_high=98.0) -> np.ndarray:
