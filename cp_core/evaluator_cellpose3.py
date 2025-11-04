@@ -421,12 +421,13 @@ class EvaluatorCellpose3:
             cp_io.save_rois(m_u16, str(base))
             written["rois_zip"] = str(base) + ".zip"
 
-        # -------------------- 5) QC PANEL (1×4 montage) --------------------
+        # -------- 1×4 Panel (input | prob | flow viz | overlay) --------
         if args.save_panels:
+            f_panel = self.d_panels / f"{stem}_panel_1x4.png"
             try:
-                f_panel = self.d_panels / f"{stem}_panel_1x4.png"
+                # Always build a panel, even if cp_plot is unavailable or flows are missing
                 import matplotlib
-                matplotlib.use("Agg")                      # headless on HPC
+                matplotlib.use("Agg")  # headless on HPC
                 import matplotlib.pyplot as plt
 
                 fig, axs = plt.subplots(1, 4, figsize=(16, 4))
@@ -436,52 +437,74 @@ class EvaluatorCellpose3:
                 axs[0].set_title("input")
                 axs[0].axis("off")
 
-                # (2) prob (logit) — raw logits, not sigmoid
+                # (2) prob (logit) — raw logits, not sigmoid (view _prob_view.tif for sigmoid)
                 axs[1].imshow(cellprob, cmap="gray")
                 axs[1].set_title("prob (logit)")
                 axs[1].axis("off")
 
-                # (3) flow magnitude if available (dict or ndarray stack)
+                # (3) flow magnitude — try dict first, then ndarray stack; otherwise leave blank
                 mag = None
-                if isinstance(flows, dict) and isinstance(flows.get("dP", None), np.ndarray):
-                    dP = flows["dP"]
-                    mag = np.sqrt(dP[0] ** 2 + dP[1] ** 2)
-                elif hasattr(flows, "ndim") and flows.ndim >= 3 and flows.shape[0] >= 2:
-                    dP = flows[:2]
+                _flows = flows[0] if isinstance(flows, (list, tuple)) else flows
+                if isinstance(_flows, dict) and isinstance(_flows.get("dP", None), np.ndarray):
+                    dP = _flows["dP"]
+                    if dP.ndim == 3 and dP.shape[0] >= 2:
+                        mag = np.sqrt(dP[0] ** 2 + dP[1] ** 2)
+                elif hasattr(_flows, "ndim") and _flows.ndim >= 3 and _flows.shape[0] >= 2:
+                    dP = _flows[:2]
                     mag = np.sqrt(dP[0] ** 2 + dP[1] ** 2)
                 if mag is not None:
                     axs[2].imshow(mag, cmap="gray")
                 axs[2].set_title("flow mag")
                 axs[2].axis("off")
 
-                # (4) overlay — use CP's helper when possible; else simple boundary
+                # (4) overlay — prefer cp_plot; otherwise simple boundary overlay
+                overlay_title = f"overlay (n={n_masks})"
+                overlay_drawn = False
                 try:
                     if cp_plot is not None and hasattr(cp_plot, "show_segmentation"):
-                        # CP expects flows as dict; pass None if not dict
-                        flows_for_plot = flows if isinstance(flows, dict) else None
+                        flows_for_plot = _flows if isinstance(_flows, dict) else None
                         cp_plot.show_segmentation(
-                            image, masks, flows_for_plot,
+                            image,
+                            masks,
+                            flows_for_plot,
                             channels=self.cfg.eval.get("channels", [0, 0]),
-                            ax=axs[3]
+                            ax=axs[3],
                         )
-                        axs[3].set_title(f"overlay (n={n_masks})")
-                    else:
-                        raise RuntimeError("cp_plot.show_segmentation unavailable")
+                        overlay_drawn = True
                 except Exception:
+                    overlay_drawn = False
+
+                if not overlay_drawn:
+                    # Fallback: draw mask boundaries even if there are zero masks (will just show input)
                     bnd = self._boundary_from_labels(m_u16)
                     axs[3].imshow(self._auto_contrast(image), cmap="gray")
-                    axs[3].contour(bnd, colors="r", linewidths=0.5)
-                    axs[3].set_title(f"overlay (n={n_masks})")
+                    if bnd.any():
+                        axs[3].contour(bnd, colors="r", linewidths=0.5)
+                axs[3].set_title(overlay_title)
                 axs[3].axis("off")
 
                 fig.tight_layout()
                 fig.savefig(str(f_panel), dpi=200)
                 plt.close(fig)
                 written["panel_png"] = str(f_panel)
-            except Exception:
-                # panel is best-effort — never block the rest of the pipeline on plotting
-                pass
 
+            except Exception as e:
+                # Panel is best-effort; never block the pipeline. Try a minimal fallback.
+                try:
+                    import matplotlib
+                    matplotlib.use("Agg")
+                    import matplotlib.pyplot as plt
+                    fig, axs = plt.subplots(1, 1, figsize=(4, 4))
+                    axs.imshow(self._auto_contrast(image), cmap="gray")
+                    axs.set_title(f"input (panel fallback, n={n_masks})")
+                    axs.axis("off")
+                    fig.tight_layout()
+                    fig.savefig(str(f_panel), dpi=200)
+                    plt.close(fig)
+                    written["panel_png"] = str(f_panel)
+                except Exception:
+                    # If even minimal fallback fails, skip silently but don't crash Stage C
+                    pass
         # -------------------- 6) JSON SUMMARY --------------------
         f_json = self.d_json / f"{stem}_summary.json"
         f_json.write_text(json.dumps({
