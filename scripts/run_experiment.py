@@ -10,8 +10,8 @@ This script is intentionally thin — it just:
   4. Executes the requested stage:
 
      - Stage A: `prepare`
-     - Stage B: `train` (resume into an existing prepared run)
-     - Stage B (Option A): `full-train` (prepare then train in one call)
+     - Stage B (resume mode): `train`  (expects an existing prepared run_dir)
+     - Stage B (Option A):    `full-train`  (runs prepare() then run_training() in one call)
 
 Usage examples
 --------------
@@ -20,12 +20,12 @@ python scripts/run_experiment.py \
     --config configs/cp3_v001.yaml \
     --mode prepare
 
-# Prepare + Train in one job (recommended Option A)
+# Prepare + Train in one job (recommended Option A for SLURM)
 python scripts/run_experiment.py \
     --config configs/cp3_v001.yaml \
     --mode full-train
 
-# Train only, resuming into an existing run directory
+# Train only, resuming into an existing run directory (must contain cfg/)
 python scripts/run_experiment.py \
     --config configs/cp3_v001.yaml \
     --mode train --run_dir /nfs/turbo/.../results/cp3_v001/run_YYYY-mm-dd_HHMMSS
@@ -102,9 +102,9 @@ def main():
     1. Parse CLI args and load YAML config using ConfigStore.
     2. Instantiate WholeOrganoidExperiment with the validated config.
     3. Dispatch by mode:
-         - prepare: create run_dir, snapshot config/env, verify dataset.
-         - full-train: prepare() then run_training() in one call.
-         - train: resume into an existing run_dir (must contain cfg/).
+         - prepare:   create run_dir, snapshot config/env, verify dataset.        (Stage A)
+         - full-train:prepare() then run_training() in one call.                  (Stage A→B, Option A)
+         - train:     resume into an existing run_dir (must contain cfg/).        (Stage B resume)
     4. Print the run directory path at completion.
 
     Writes
