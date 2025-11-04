@@ -1,5 +1,5 @@
 """
-WholeOrganoidExperiment — Stage A
+WholeOrganoidExperiment — Stage A(+B wrapper)
 Prepare a timestamped run directory, validate dataset, and log environment.
 
 Purpose
@@ -9,11 +9,15 @@ Stage A orchestration wrapper. This class wires together:
   * Environment capture (for reproducibility),
   * Dataset discovery/validation (for quick feedback),
   * Creation of the run directory structure used by later stages.
+Also includes Stage B wrappers (`run_training`, `run_full_train`) that delegate
+to TrainerCellpose3 without embedding training logic here.
 
 Notes
 -----
 * Stage A is intentionally "shallow but decisive": we don't touch model code
   or images — we only prepare the ground truth for subsequent stages.
+* Stage B remains thin here: we assemble lists, capture console logs,
+  and save metadata; the trainer owns Cellpose calls.
 """
 
 from __future__ import annotations
@@ -25,14 +29,19 @@ import json
 from .config_store import ConfigStore, Config
 from .dataset import DatasetManager
 from .logger import RunLogger
+from .trainer_cellpose3 import TrainerCellpose3
 
 class WholeOrganoidExperiment:
-    """Stage A orchestrator.
+    """Stage A orchestrator + Stage B wrapper.
 
     Methods
     -------
     prepare() -> None
         Create run_dir, save config snapshot, log env, verify dataset.
+    run_training() -> None
+        Stage B wrapper: assemble inputs, capture console, persist outputs.
+    run_full_train() -> None
+        Option A: prepare() then run_training() in one call.
     get_run_dir() -> Path
         Return the prepared run directory path.
 
@@ -41,7 +50,7 @@ class WholeOrganoidExperiment:
     * The timestamped `run_dir` makes every execution self-contained and
       immutable — later stages (training/eval) write under this directory.
     * This class remains thin and declarative; any heavy logic belongs to
-      specialized components (ConfigStore, DatasetManager, RunLogger, etc.).
+      specialized components (ConfigStore, DatasetManager, RunLogger, Trainer...).
     """
 
     def __init__(self, cfg: Config):
@@ -126,6 +135,69 @@ class WholeOrganoidExperiment:
         }
         (self.cfg_dir / "prepare_summary.json").write_text(json.dumps(summary, indent=2))
 
+    def run_training(self) -> None:
+        """Run Stage B training (specialist policy) and write train artifacts.
+
+        Flow
+        ----
+        1) Gather train image/label lists from DatasetManager.
+        2) Initialize TrainerCellpose3 and build TrainArgs
+           (rescale=False, diameter=1350, bsize=512).
+        3) Use RunLogger.tee_stdout to capture console logs to run/train/stdout_stderr.log.
+        4) Call trainer.train(...), then save_weights(...) and record_training_metadata(...).
+
+        Writes
+        ------
+        - run/train/stdout_stderr.log
+        - run/train/weights_final.pt
+        - run/train/metrics.json
+
+        Raises
+        ------
+        RuntimeError
+            If any training image lacks a corresponding label.
+        """
+        # 1) build strict image/label lists
+        dm = DatasetManager(self.cfg.paths, self.cfg.labels, self.cfg_dir)
+        images = dm.list_images("train")
+        labels = []
+        for ip in images:
+            lab = dm.label_for(ip)
+            if lab is None:
+                raise RuntimeError(f"Missing label for training image: {ip.name}")
+            labels.append(lab)
+
+        # 2) initialize trainer & model (specialist settings enforced in build_train_args)
+        trainer = TrainerCellpose3(self.cfg, self.run_dir, self.logger)
+        model = trainer.load_model(
+            use_pretrained=bool(self.cfg.train.get("use_pretrained", True)),
+            model_type=self.cfg.train.get("model_type", "cyto3"),
+        )
+        args = trainer.build_train_args(self.cfg) # [CONTRACT] rescale=False, bsize default 512
+
+        # 3) capture training console → run/train/stdout_stderr.log
+        log_file = self.run_dir / "train" / "stdout_stderr.log"
+        with self.logger.tee_stdout(log_file):
+            metrics = trainer.train(model, images, labels, args)
+
+        # 4) weights + metadata to run/train/
+        weight_path = trainer.save_weights(model, self.run_dir / "train")
+        trainer.record_training_metadata(self.run_dir / "train", {
+            "weights_final": str(weight_path),
+            "trainer": "TrainerCellpose3",
+            "metrics": metrics,
+        })
+
+    def run_full_train(self) -> None:
+        """Option A orchestration: prepare() then run_training() in a single call.
+
+        Notes
+        -----
+        Ensures every training run has a fresh cfg/ snapshot in the same run_dir.
+        """
+        self.prepare()
+        self.run_training()
+        
     def get_run_dir(self) -> Path:
         """Return the absolute Path to the prepared run directory.
 

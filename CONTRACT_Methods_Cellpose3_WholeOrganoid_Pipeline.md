@@ -308,19 +308,87 @@ system:
 **Status:** ✅ READY | 🔒 Locked Date: 2025-11-03 | Branch: `stageA_prepare`
 
 ### Stage B — Training (Native Scale)
-- **Status:** ☐ NOT READY
-- **Deliverables:** `TrainerCellpose3` + `WholeOrganoidExperiment.run_training()`  
-- **Acceptance:**  
-  - Training completes on seed set; `rescale=False` and `bsize=512` logged  
-  - `train/weights_final.pt`, `train/metrics.json`, `train/stdout_stderr.log` present
+**Status:** ✅ READY | 🔒 Locked Date: 2025-11-04 | Branch: `stageB_training` | Commit: `a211631` | Owner: Manny 
+
+**Deliverables**
+- `TrainerCellpose3` (v3 API training; guarantees rescale = False, bsize = 512)
+- `WholeOrganoidExperiment.run_training()` + `run_full_train()` orchestration
+- SLURM job: `slurm/train_cp3_wholeorganoid.slurm` calling `--mode full-train`
+- Training logs + metadata under `run/train/`
+
+**Invariants**
+- `train.rescale = false` (native pixels)
+- `train.bsize = 512`
+- `train.diameter` = 1350 px (*logged only; not a train_seg kwarg in v3*)
+- API path only (no CLI)
+- Initialization via `train.use_pretrained` (True/False) and `train.model_type`
+- Channels default `[0, 0]` (grayscale TIFFs)
+
+**Config keys consumed**
+- `train.use_pretrained : bool`
+- `train.model_type : str | null`
+- `train.n_epochs : int`
+- `train.learning_rate : float | null` → Cellpose default (0.005)
+- `train.weight_decay : float | null` → Cellpose default (1e-5)
+- `train.batch_size : int`
+- `train.rescale : bool (must be false)`
+- `train.diameter : int (logged only)`
+- `train.bsize : int (default 512)`
+- `train.channels : [int, int] (default [0,0])`
+- `train.normalize : bool (default false)`
+- `train.save_each : bool (default false)`
+- `train.nimg_per_epoch : int | null (optional)`
+- `labels.mask_filter`, `paths.data_images_train`, `paths.data_labels_train`, `paths.results_root`
+
+**Implemented API**
+- **TrainerCellpose3**
+  - `load_model(use_pretrained: bool, model_type: str|None) -> ModelHandle`
+  - `build_train_args(cfg: Config) -> TrainArgs`
+  - `train(model, images, labels, args) -> TrainedModelHandle`
+  - `save_weights(handle, dst_dir) -> Path`
+  - `record_training_metadata(dst_dir, metrics) -> None`
+- **WholeOrganoidExperiment**
+  - `run_training() -> None`
+  - `run_full_train() -> None`
+
+**Writes**
+- `results/<model>/run_<ts>/train/weights_final.pt`
+- `results/<model>/run_<ts>/train/metrics.json`
+- `results/<model>/run_<ts>/train/stdout_stderr.log`
+- (plus epoch checkpoints in `train/models/` if `save_each = true`)
+
+**Acceptance**
+- `[INFO] computing flows for labels` and `[Stage B] Starting training…` appear in stdout_stderr.log  
+- `weights_final.pt` non-zero file > 0 KB  
+- `metrics.json` records `effective_args` with `rescale=False`, `bsize=512`, and `nimg_per_epoch` key  
+- Run completes `COMPLETED (0:0)` in SLURM and artifacts exist under `run/train/`
 
 ### Stage C — Evaluation & Artifacts
-- **Status:** ☐ NOT READY
-- **Deliverables:** `EvaluatorCellpose3`, `ArtifactWriter`, `QCReporter`, `WholeOrganoidExperiment.run_evaluation()`  
-- **Acceptance:**  
-  - For each `valid` image, all artifact files exist with correct stems  
-  - `niter=2000`, `bsize=512`, `resample=False` logged per run  
-  - `eval/eval_summary.json` aggregates counts/timings
+Status: ☐ NOT READY  |  Planned Branch: stageC_eval  |  Owner: Manny
+	•	Invariants (must hold)
+	•	Native grid: eval.resample=false, no diameter by default (keep null).
+	•	Long dynamics: eval.niter=2000; tiling: eval.bsize=512.
+	•	Thresholds: eval.flow_threshold=0.4, eval.cellprob_threshold=0.0.
+	•	Save both raw and view:
+	•	prob.tif = raw logits (float32; no sigmoid)
+	•	prob_view.tif = sigmoid(cellprob) for human QA (optional toggle)
+	•	Per-image artifacts (stems unified)
+	•	eval/masks/<stem>_masks.tif (uint16)
+	•	eval/flows/<stem>_flows.npy (vector field [dy,dx])
+	•	eval/flows/<stem>_flows.tif (viz)
+	•	eval/prob/<stem>_prob.tif (logits)
+	•	eval/prob/<stem>_prob_view.tif (sigmoid, if save_prob_view=true)
+	•	eval/rois/<stem>_rois.zip (ImageJ archive)
+	•	eval/panels/<stem>_panel_1x4.png (input | prob (logit) | flows viz | overlay)
+	•	eval/json/<stem>_summary.json
+	•	eval/eval_summary.json (aggregate)
+	•	Config keys consumed
+	•	eval.niter, eval.bsize, eval.resample
+	•	eval.flow_threshold, eval.cellprob_threshold
+	•	eval.channels, eval.normalize
+	•	eval.save_panels, eval.save_rois, eval.save_flows, eval.save_prob, eval.save_prob_view
+	•	eval.eval_split (valid or all)
+
 
 ### Stage D — Baselines & Re‑Eval
 - **Status:** ☐ NOT READY
