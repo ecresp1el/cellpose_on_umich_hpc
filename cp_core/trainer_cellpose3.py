@@ -172,7 +172,6 @@ class TrainerCellpose3:
             normalize=args.normalize,
             bsize=args.bsize,
             batch_size=args.batch_size,
-            diameter=args.diameter,
             **(args.extra_kwargs or {}),
         )
         if args.learning_rate is not None:
