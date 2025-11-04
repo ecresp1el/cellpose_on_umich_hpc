@@ -231,7 +231,7 @@ class EvaluatorCellpose3:
             img,                        # can be single array or list
             channels=args.channels,
             normalize=args.normalize,
-            rescale=args.resample,      # [CONTRACT] false → native grid
+            rescale=None,      # [CONTRACT] false → native grid
             niter=args.niter,
             bsize=args.bsize,
             flow_threshold=getattr(args, "flow_threshold", None),
