@@ -10,7 +10,7 @@ paths:
   logs_root: /nfs/turbo/umms-parent/cellpose_wholeorganoid_model/logs
 
 labels:
-  mask_filter: _seg.npy
+  mask_filter: _cp_masks.png
 
 train:
   use_pretrained: true
