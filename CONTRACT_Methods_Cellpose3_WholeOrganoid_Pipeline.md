@@ -282,6 +282,31 @@ system:
   - Verified counts; clear warnings for missing labels  
   - No training/eval executed
 
+**Implemented API (Stage A – branch `stageA_prepare`):**
+
+- **ConfigStore**
+  - `load_from_yaml(path: str) → Config`
+  - `save_snapshot(dst_dir: Path, cfg: Config) → None`
+
+- **DatasetManager**
+  - `_list_dir_images(d: Path) → list[Path]` *(internal helper)*
+  - `list_images(split: Literal["train","valid","all"]) → list[Path]`
+  - `image_id(image_path: Path) → str`
+  - `label_for(image_path: Path) → Optional[Path]`
+  - `verify_structure() → DatasetReport`
+
+- **RunLogger**
+  - `log_env_and_cfg(cfg: dict, dst_dir: Path) → None`
+  - `tee_stdout(to_file: Path)` *(context manager)*
+  - `time_block(name: str)` *(context manager)*
+
+- **WholeOrganoidExperiment**
+  - `prepare() → None`
+  - `get_run_dir() → Path`
+
+*(CLI entrypoint – `scripts/run_experiment.py`: `parse_args()` and `main()` are command-line helpers, not part of the formal API.)*
+**Status:** ✅ READY | 🔒 Locked Date: 2025-11-03 | Branch: `stageA_prepare`
+
 ### Stage B — Training (Native Scale)
 - **Status:** ☐ NOT READY
 - **Deliverables:** `TrainerCellpose3` + `WholeOrganoidExperiment.run_training()`  
