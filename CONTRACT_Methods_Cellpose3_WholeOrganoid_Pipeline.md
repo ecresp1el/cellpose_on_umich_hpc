@@ -363,31 +363,99 @@ system:
 - `metrics.json` records `effective_args` with `rescale=False`, `bsize=512`, and `nimg_per_epoch` key  
 - Run completes `COMPLETED (0:0)` in SLURM and artifacts exist under `run/train/`
 
-### Stage C — Evaluation & Artifacts
-Status: ☐ NOT READY  |  Planned Branch: stageC_eval  |  Owner: Manny
-	•	Invariants (must hold)
-	•	Native grid: eval.resample=false, no diameter by default (keep null).
-	•	Long dynamics: eval.niter=2000; tiling: eval.bsize=512.
-	•	Thresholds: eval.flow_threshold=0.4, eval.cellprob_threshold=0.0.
-	•	Save both raw and view:
-	•	prob.tif = raw logits (float32; no sigmoid)
-	•	prob_view.tif = sigmoid(cellprob) for human QA (optional toggle)
-	•	Per-image artifacts (stems unified)
-	•	eval/masks/<stem>_masks.tif (uint16)
-	•	eval/flows/<stem>_flows.npy (vector field [dy,dx])
-	•	eval/flows/<stem>_flows.tif (viz)
-	•	eval/prob/<stem>_prob.tif (logits)
-	•	eval/prob/<stem>_prob_view.tif (sigmoid, if save_prob_view=true)
-	•	eval/rois/<stem>_rois.zip (ImageJ archive)
-	•	eval/panels/<stem>_panel_1x4.png (input | prob (logit) | flows viz | overlay)
-	•	eval/json/<stem>_summary.json
-	•	eval/eval_summary.json (aggregate)
-	•	Config keys consumed
-	•	eval.niter, eval.bsize, eval.resample
-	•	eval.flow_threshold, eval.cellprob_threshold
-	•	eval.channels, eval.normalize
-	•	eval.save_panels, eval.save_rois, eval.save_flows, eval.save_prob, eval.save_prob_view
-	•	eval.eval_split (valid or all)
+### Stage C — Evaluation & Artifact Generation (Cellpose v3 API, Native Grid)
+**Status:** ☐ NOT READY  |  Planned Branch: `stageC_evaluation`  |  Owner: Manny  
+
+---
+
+#### **Deliverables**
+- `EvaluatorCellpose3` class (API inference & artifact writer)  
+- `WholeOrganoidExperiment.run_evaluation()` method (launches EvaluatorCellpose3)  
+- CLI mode `--mode eval` in `scripts/run_experiment.py`  
+- SLURM job `slurm/eval_cp3_wholeorganoid.slurm`  
+- Evaluation outputs under `run/eval/` (sub-folders for masks, flows, probabilities, panels, JSON summaries)
+
+---
+
+#### **Scope & Purpose**
+Stage C performs native-scale inference on validation or all images using a trained Cellpose v3 model.  
+It produces publication-ready artifacts for visual and quantitative QC without resampling or diameter normalization.  
+Evaluation operates in read-only mode relative to Stage B training outputs.
+
+---
+
+#### **Invariants & Defaults**
+| Key | Default / Required Value | Notes |
+|-----|--------------------------|-------|
+| `eval.resample` | **false** | Preserves native pixel grid |
+| `eval.niter` | 2000 | Flow integration steps for large objects |
+| `eval.bsize` | 512 | Tile size for inference (keep consistent with training) |
+| `eval.flow_threshold` | 0.4 | Conservative flow acceptance threshold |
+| `eval.cellprob_threshold` | 0.0 | Include low-confidence pixels; filter later if needed |
+| `eval.channels` | [0, 0] | Grayscale images |
+| `eval.normalize` | false | Keep raw intensity scale |
+| `eval.save_panels` | true | Save 1×4 QC PNG panels |
+| `eval.save_rois` | true | Write ImageJ ROI archives |
+| `eval.save_flows` | true | Save NumPy/TIFF flow fields |
+| `eval.save_prob` | true | Save raw logits (`_prob.tif`) |
+| `eval.save_prob_view` | true | Save sigmoid(prob) for visual QA (`_prob_view.tif`) |
+| `eval.eval_split` | `valid` (default) or `all` | Choose dataset subset for evaluation |
+
+---
+
+#### **Config keys consumed**
+- `paths.data_images_valid`, `paths.data_labels_valid`  
+- `paths.results_root`, `model_name_out`  
+- `train.channels`, `train.normalize` (if not overridden in eval)  
+- `eval.*` as listed above  
+
+---
+
+#### **Implemented API (to add in this stage)**
+- **EvaluatorCellpose3**
+  - `load_model(weights_path: Path) → CellposeModel`
+  - `evaluate_images(split: Literal["valid","all"], cfg: Config) → List[EvalResult]`
+  - `save_artifacts(image_path, masks, flows, cellprob, cfg) → Dict[str, Path]`
+  - `make_qc_panel(image, masks, cellprob, flows, cfg) → Path`
+  - `aggregate_summary(eval_dir: Path) → None`  
+- **WholeOrganoidExperiment**
+  - `run_evaluation(split="valid") → None`
+
+---
+
+#### **Writes (Stage C)**
+Each `<stem>` corresponds to a source image (e.g., `Exp68_Slide1_…`): 
+
+results//run_/eval/
+├── masks/_masks.tif
+├── flows/_flows.npy
+├── flows/_flows.tif
+├── prob/_prob.tif          # logits (float32)
+├── prob/_prob_view.tif     # sigmoid (probability)
+├── rois/_rois.zip
+├── panels/_panel_1x4.png
+├── json/_summary.json
+└── eval_summary.json
+
+---
+
+#### **Acceptance Criteria**
+- For each evaluated image:  
+  • `_masks.tif`, `_flows.npy`, `_prob.tif`, and `_panel_1x4.png` exist and are non-empty.  
+  • `_prob.tif` is raw logits; `_prob_view.tif` is sigmoid(prob).  
+  • All artifacts share the same stem and dims as input image.  
+- `eval_summary.json` aggregates counts (#images, mean mask count, runtime).  
+- Logs show “[Stage C] Evaluated N images” and no exceptions.  
+- SLURM job finishes `COMPLETED (0:0)` with artifacts present under `run/eval/`.
+
+---
+
+#### **Notes**
+- Evaluation runs purely with `CellposeModel.eval()` (no training).  
+- `diameter` is ignored when `resample=false`.  
+- QC panels use `cellpose.plot.show_segmentation()` and `plot.image_to_rgb()` when available.  
+- Supports both GPU and CPU execution (`gpu=True` auto-detect).  
+- Future extension: add Napari viewer launch (`--interactive`) for manual inspection.
 
 
 ### Stage D — Baselines & Re‑Eval
