@@ -25,7 +25,7 @@ train:
   channels: [0, 0]
   normalize: false
   min_train_masks: 0
-  save_each: false
+  save_each: true
   extra_kwargs: {}              # passthrough to cellpose.train.train_seg
 
 eval:
