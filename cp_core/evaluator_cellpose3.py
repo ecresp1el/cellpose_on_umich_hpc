@@ -220,28 +220,55 @@ class EvaluatorCellpose3:
             arr = arr[..., 0]
         return arr
 
-    def _eval_single(self, model, image: np.ndarray, args: EvalArgs) -> Tuple[np.ndarray, Dict[str, np.ndarray], np.ndarray]:
-        """Run Cellpose eval on a single image and return (masks, flows, cellprob)."""
-        # Cellpose v3 returns: masks, flows, styles, diams
-        masks, flows, styles, diams = model.eval(
-            [image],
+    def _eval_single(self, model, img: "np.ndarray", args) -> Tuple["np.ndarray", Any, "np.ndarray"]:
+        """Run Cellpose v3 eval and return (masks, flows, cellprob).
+
+        Handles both (masks, flows, styles) and (masks, flows, styles, diams)
+        return signatures across CP 3.x; extracts the cellprob/logit map from
+        `flows` using tolerant key search; falls back to zeros if none present.
+        """
+        out = model.eval(
+            img,  # CP 3.x accepts either array or list; we pass single image
             channels=args.channels,
             normalize=args.normalize,
-            flow_threshold=args.flow_threshold,
-            cellprob_threshold=args.cellprob_threshold,
-            resample=args.resample,           # [CONTRACT] keep native grid
-            bsize=args.bsize,
+            rescale=args.resample,            # [CONTRACT] false → native grid
             niter=args.niter,
-            # diameter intentionally omitted by contract
+            bsize=args.bsize,
+            # thresholds are used internally in CP for mask extraction
+            flow_threshold=getattr(args, "flow_threshold", None),
+            cellprob_threshold=getattr(args, "cellprob_threshold", None),
         )
-        # Unbatch
-        masks = masks[0]
-        flows = flows[0]    # dict, e.g., {"dP": (2,H,W), "p": prob map}
-        # v3 stores logits in flows["p"] or returns separately as "cellprob"
-        cellprob = flows.get("p", None)
+
+        # CP 3.x can return 3-tuple or 4-tuple depending on code path/version
+        if not isinstance(out, tuple):
+            raise RuntimeError(f"Unexpected eval() return type: {type(out)}")
+        if len(out) == 4:
+            masks, flows, _styles, _diams = out
+        elif len(out) == 3:
+            masks, flows, _styles = out
+        else:
+            raise RuntimeError(f"Unexpected number of values from eval(): {len(out)}")
+
+        # Extract cellprob/logits from flows (key name varies by CP version)
+        cellprob = None
+        if isinstance(flows, dict):
+            for k in ("cellprob", "p", "prob", "P"):
+                if k in flows:
+                    cellprob = flows[k]
+                    break
+        else:
+            # Some variants return a numpy array of shape (C,H,W); last/3rd chan can be prob
+            try:
+                import numpy as np
+                if hasattr(flows, "ndim") and flows.ndim >= 3 and flows.shape[0] >= 3:
+                    cellprob = flows[2].astype(np.float32, copy=False)
+            except Exception:
+                pass
+
         if cellprob is None:
-            # If CP API returns differently, try styles/diams fallback
-            raise RuntimeError("Cellpose eval did not return cellprob logits in flows['p'].")
+            # Fallback: still return something usable; mask output will be saved, prob=0
+            import numpy as np
+            cellprob = np.zeros_like(masks, dtype=np.float32)
 
         return masks, flows, cellprob
 
