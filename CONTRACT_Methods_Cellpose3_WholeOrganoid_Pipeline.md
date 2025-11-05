@@ -368,6 +368,42 @@ system:
 
 ---
 
++---
++
++### Stage C — Plotting-First Debug Protocol & Two-Image Playground (Locked Order)
++
++**Order of Operations (must follow this order):**
++1) **Resolve plotting issues first**  
++   - Reproduce with **`eval.save_panels: true`** on a minimal subset (two images).  
++   - Add **print-only instrumentation** (no refactors) to log: `image.shape`, `masks.shape`, `cellprob.min/max/mean`, and `flows.shape`.  
++   - Panel routine must be robust to **both flow layouts** `(2,H,W)` and `(H,W,2)`; only the *panel path* may transpose or compute magnitude. Core artifacts are saved exactly as produced.  
++   - No resizing/cropping in panels; if a shape mismatch occurs, write a blank tile and **WARN**, then continue.  
++   - Acceptance to exit this step: for both test images, `_panel_1x4.png` is written, non-empty, and aligns with input dims; no exceptions in logs.
++
++2) **Then create the “playground” (two-image eval)**  
++   - Establish a tiny valid split at:  
++     `/nfs/turbo/umms-parent/cellpose_wholeorganoid_model/dataset/valid_debug/{images,labels}`  
++     (symlinks allowed; labels optional).  
++   - Point **only** `paths.data_images_valid` and `paths.data_labels_valid` to this folder in a **temporary YAML** (do not move or duplicate the main dataset).  
++   - Use YAML-only sweeps to explore evaluation knobs **without code changes**:  
++     - `eval.channels`: try `[0,0]`, `[1,0]`, `[2,0]`  
++     - `eval.cellprob_threshold`: e.g., `0.0` and a smoke-pass at `-3.0`  
++     - `eval.flow_threshold`: e.g., `0.4` and a smoke-pass at `0.2`  
++   - Keep Stage C invariants fixed: `resample=false`, `niter=2000`, `bsize=512`. No `diameter` in eval.  
++   - Optional: run multiple YAMLs via SLURM array; every run writes to a **unique** `results/<model>/run_<ts>/` (no overwrites).
++
++**Minimal Change Policy (applies to both steps):**
++- Only **print/log statements** and **YAML edits** are permitted while debugging Stage C.  
++- No API renames, no structural refactors, no changing file layout.  
++- If a code edit is unavoidable for panel robustness, it must be a **single-line guard** (e.g., flow layout check) and be documented in the commit message as “Stage C plotting guard (print-instrumented).”
++
++**Additional Acceptance (extends Stage C):**
++- With plotting fixed (Step 1), the two-image playground (Step 2) must produce, for each image:  
++  `_masks.tif`, `_flows.npy`, `_prob.tif`, `_prob_view.tif`, `_rois.zip`, and `_panel_1x4.png`, all non-empty and with matching stems/dims.  
++- Logs include one-line numeric summaries per image:  
++  `[Stage C][<stem>] n_masks=… mask_px=… prob_mean=… prob_max=… pos_frac@thr=…`  
++- `eval_summary.json` is written and aggregates count/runtime across the two images.
+
 #### **Deliverables**
 - `EvaluatorCellpose3` class (API inference & artifact writer)  
 - `WholeOrganoidExperiment.run_evaluation()` method (launches EvaluatorCellpose3)  
