@@ -151,12 +151,36 @@ def main():
     # Resolve paths (YAML suffix preferred; fallbacks if needed)
     img_p, lbl_p = find_image_and_label(images_dir, labels_dir, args.stem, mask_suffix, debug=args.debug)
 
-    # Read arrays
+    # --- read image file ---
     X = imread(img_p)
-    if lbl_p.suffix == ".npy":
-        Y = np.load(lbl_p)
-    else:
-        Y = imread(lbl_p)
+
+    # --- determine how to read the label file (robust and explicit) ---
+    suffix = lbl_p.suffix.lower()
+    print(f"[INFO] Label file detected: {lbl_p.name}")
+    print(f"[INFO] Supported readers available:")
+    print("        • NumPy loader (.npy)")
+    print("        • ImageIO for PNG/JPEG/BMP")
+    print("        • Tifffile for .tif/.tiff")
+    print(f"[INFO] Selected reader based on extension: {suffix}")
+
+    try:
+        if suffix == ".npy":
+            print("[DEBUG] Using NumPy loader...")
+            Y = np.load(lbl_p)
+        elif suffix in (".png", ".jpg", ".jpeg", ".bmp"):
+            print("[DEBUG] Using ImageIO loader for non-TIFF image...")
+            import imageio.v3 as iio
+            Y = iio.imread(lbl_p)
+            if Y.ndim == 3:
+                print(f"[DEBUG] PNG mask has {Y.shape[-1]} channels; taking first channel for mask semantics.")
+                Y = Y[..., 0]
+        else:
+            print("[DEBUG] Using Tifffile loader...")
+            Y = imread(lbl_p)
+    except Exception as e:
+        raise RuntimeError(f"Failed to read label file '{lbl_p}' with suffix {suffix}: {e}")
+
+    print(f"[INFO] Label file successfully read → shape={Y.shape}, dtype={Y.dtype}")
 
     if args.debug:
         print(f"[PATH] X: {img_p}")
