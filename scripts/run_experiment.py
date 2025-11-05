@@ -58,36 +58,96 @@ from cp_core.experiment import WholeOrganoidExperiment
 # -------------------------------------------------------------
 # Optional pre-train hook: prefer single-channel “squished” train images
 # -------------------------------------------------------------
-def prefer_squished_train_images(cfg: dict) -> None:
-    paths = cfg.get("paths", {}) or {}
-    labels_cfg = cfg.get("labels", {}) or {}
-    train_imgs = Path(paths.get("data_images_train",""))
-    train_lbls = Path(paths.get("data_labels_train",""))
-    if not train_imgs.exists() or not train_lbls.exists():
-        print(f"[squish] TRAIN images or labels missing; no replacement"); return
+# -------------------------------------------------------------
+# Optional pre-train hook: prefer single-channel “squished” train images
+# -------------------------------------------------------------
+from pathlib import Path
 
-    prefer = ((cfg.get("preprocess") or {}).get("squish") or {}).get("out_subdir")
-    cands = [train_imgs.parent / s for s in ([prefer] if prefer else [])] + [
+def prefer_squished_train_images(cfg) -> None:
+    """
+    If a single-channel 'squished' TRAIN images folder exists (flat, e.g. images_squish_max),
+    repoint cfg.paths.data_images_train to it. Labels remain unchanged.
+    Handles both dict-based and object-based Configs.
+    Prints counts and the exact replacement performed. No resizing, only channels→1.
+    """
+
+    # ---- helpers to access cfg as dict or object safely ----
+    def _get(obj, key, default=None):
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    def _set(obj, key, value):
+        if isinstance(obj, dict):
+            obj[key] = value
+            return True
+        if hasattr(obj, key):
+            setattr(obj, key, value)
+            return True
+        return False
+
+    # top-level blocks
+    paths  = _get(cfg, "paths")
+    labels = _get(cfg, "labels")
+
+    if paths is None:
+        print("[squish] cfg.paths not found; no replacement")
+        return
+
+    # read current train paths
+    train_imgs = Path(_get(paths, "data_images_train", "")) if _get(paths, "data_images_train", "") else None
+    train_lbls = Path(_get(paths, "data_labels_train", "")) if _get(paths, "data_labels_train", "") else None
+
+    if not train_imgs or not train_imgs.exists():
+        print(f"[squish] TRAIN images dir not found: {train_imgs}  (no replacement)")
+        return
+    if not train_lbls or not train_lbls.exists():
+        print(f"[squish] TRAIN labels dir not found: {train_lbls}  (no replacement)")
+        return
+
+    # candidate squished subdirs next to the current train images dir
+    prefer = _get(_get(cfg, "preprocess", {}), "squish", {}) or {}
+    prefer_subdir = prefer.get("out_subdir")
+    candidates = []
+    if prefer_subdir:
+        candidates.append(train_imgs.parent / prefer_subdir)
+    candidates += [
         train_imgs.parent / "images_squish_max",
         train_imgs.parent / "images_squish_mean",
         train_imgs.parent / "images_squish_sum",
     ]
 
     pick = None
-    for c in cands:
-        if c.exists() and (len(list(c.glob("*.tif")))+len(list(c.glob("*.tiff"))))>0:
-            pick = c; break
-    if not pick:
-        print("[squish] No squished TRAIN folder found next to", train_imgs, "looked for:",
-              ", ".join(str(x) for x in cands))
+    for cand in candidates:
+        if cand.exists():
+            n = len(list(cand.glob("*.tif"))) + len(list(cand.glob("*.tiff")))
+            if n > 0:
+                pick = cand
+                break
+
+    if pick is None:
+        print("[squish] No squished TRAIN folder found next to", train_imgs,
+              "\n          looked for:", ", ".join(str(c) for c in candidates))
         return
 
+    # count pairs respecting YAML labels.mask_filter
+    mask_suffix = None
+    if isinstance(labels, dict):
+        mask_suffix = labels.get("mask_filter")
+    else:
+        mask_suffix = getattr(labels, "mask_filter", None)
+
     def _has_label(stem: str) -> bool:
-        suf = labels_cfg.get("mask_filter")
-        LL = [train_lbls/f"{stem}{suf}"] if suf else []
-        LL += [train_lbls/f"{stem}_masks.tif", train_lbls/f"{stem}.png",
-               train_lbls/f"{stem}.npy", train_lbls/f"{stem}_seg.npy"]
-        return any(p.exists() for p in LL)
+        cands = []
+        if mask_suffix:
+            cands.append(train_lbls / f"{stem}{mask_suffix}")
+        cands += [
+            train_lbls / f"{stem}_masks.tif",
+            train_lbls / f"{stem}.png",
+            train_lbls / f"{stem}.npy",
+            train_lbls / f"{stem}_seg.npy",
+        ]
+        return any(p.exists() for p in cands)
 
     imgs = sorted(list(pick.glob("*.tif")) + list(pick.glob("*.tiff")))
     n_images = len(imgs)
@@ -96,14 +156,37 @@ def prefer_squished_train_images(cfg: dict) -> None:
     print(f"[squish] FOUND squished TRAIN folder: {pick}")
     print(f"[squish] images={n_images}  paired_with_labels={n_paired}  labels_dir={train_lbls}")
 
-    prev = train_imgs
-    paths["data_images_train"] = str(pick)
-    cfg["paths"] = paths
-    print(f"[squish] REPLACED train images dir:\n          {prev}\n          → {pick}")
+    # replace path in cfg.paths (dict or object)
+    if isinstance(paths, dict):
+        prev = paths.get("data_images_train")
+        paths["data_images_train"] = str(pick)
+        print(f"[squish] REPLACED train images dir:\n          {prev}\n          → {pick}")
+    else:
+        prev = getattr(paths, "data_images_train", None)
+        setattr(paths, "data_images_train", str(pick))
+        print(f"[squish] REPLACED train images dir:\n          {prev}\n          → {pick}")
 
-    cfg.setdefault("train",{}).update({"channels":[0,0]})
-    cfg.setdefault("eval", {}).update({"channels":[0,0]})
-    print("[squish] Enforced single-channel: train/eval.channels → [0,0]")
+    # enforce single-channel usage for squished data
+    train_cfg = _get(cfg, "train") or {}
+    eval_cfg  = _get(cfg, "eval")  or {}
+    changed_tc = (train_cfg.get("channels") if isinstance(train_cfg, dict) else getattr(train_cfg, "channels", None)) != [0,0]
+    changed_ec = (eval_cfg.get("channels")  if isinstance(eval_cfg,  dict) else getattr(eval_cfg,  "channels",  None)) != [0,0]
+
+    if isinstance(train_cfg, dict):
+        train_cfg["channels"] = [0,0]
+        _set(cfg, "train", train_cfg)
+    else:
+        setattr(train_cfg, "channels", [0,0])
+    if isinstance(eval_cfg, dict):
+        eval_cfg["channels"] = [0,0]
+        _set(cfg, "eval", eval_cfg)
+    else:
+        setattr(eval_cfg, "channels", [0,0])
+
+    if changed_tc:
+        print("[squish] Set train.channels → [0, 0] (single-channel).")
+    if changed_ec:
+        print("[squish] Set eval.channels  → [0, 0] (single-channel).")
 
 
 def parse_args():
