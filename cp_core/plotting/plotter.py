@@ -12,6 +12,8 @@
 from __future__ import annotations
 from pathlib import Path
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")  # ensure headless saving on Great Lakes
 import matplotlib.pyplot as plt
 
 # ---------------------------- core plot util ----------------------------
@@ -45,8 +47,9 @@ def imshow_multi2d(images, titles, nrows: int, ncols: int, save_path: Path | Non
     if save_path:
         save_path = Path(save_path)
         save_path.parent.mkdir(parents=True, exist_ok=True)
+        print(f"[PLOT] writing → {save_path} (dpi={dpi})")
         fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
-        print(f"[PLOT] saved → {save_path}")
+        print(f"[PLOT] saved   → {save_path}")
     plt.close(fig)
     return save_path
 
