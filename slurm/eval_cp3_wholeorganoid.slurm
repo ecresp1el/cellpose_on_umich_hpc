@@ -94,10 +94,6 @@ pip install pyyaml
 # Useful for verifying the PyYAML installation and version in the current environment.
 python -c "import yaml; print('PyYAML loaded:', yaml.__version__)"
 
-# Install Matplotlib + ImageIO for panel generation
-pip install matplotlib imageio
-# Verify Matplotlib and ImageIO installation
-python -c "import matplotlib, imageio; print('Matplotlib loaded:', matplotlib.__version__); print('ImageIO loaded:', imageio.__version__)"
 
 # ------------------------- Stage C: EVALUATION -------------------------------
 python -u "${REPO_ROOT}/scripts/run_experiment.py" \
