@@ -62,7 +62,7 @@ echo ">>> STEM: ${STEM}"
 
 python -u "${REPO_ROOT}/scripts/squish_one_stem.py" \
   --config "${CONFIG_PATH}" \
-  --stem "${STEM}" \
+  --stem "${STEM}" \z
   --mode "${MODE}" \
   $([ -n "${OUT_SUBDIR}" ] && echo --out_subdir "${OUT_SUBDIR}") \
   --debug
