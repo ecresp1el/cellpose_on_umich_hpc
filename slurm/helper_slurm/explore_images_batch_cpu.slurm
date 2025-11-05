@@ -1,5 +1,5 @@
 #!/bin/bash
-# explore_images_batch_cpu.slurm — run a chosen exploratory script for many train stems
+# explore_images_batch_cpu.slurm — run an exploratory script for many train stems (single job)
 #SBATCH --job-name=cp3_explore_batch
 #SBATCH --account=parent0
 #SBATCH --partition=standard
@@ -12,12 +12,12 @@ set -euo pipefail
 
 # ------------------- OVERRIDES AT SUBMISSION (with --export=) ----------------
 : "${REPO_ROOT:=${HOME}/Desktop/githubprojects/cellpose_on_umich_hpc}"
-: "${CONFIG_PATH:=${REPO_ROOT}/configs/cp3_v001.yaml}"   # YAML is source of truth (contract §3)
+: "${CONFIG_PATH:=${REPO_ROOT}/configs/cp3_v001.yaml}"   # YAML is source of truth
 : "${ENV_NAME:=cellpose3}"
-: "${SCRIPT_NAME:=exploratory_analysis_images.py}"       # or exploratory_plot_images.py
+: "${SCRIPT_NAME:=exploratory_plot_images.py}"           # or exploratory_analysis_images.py
 : "${CHANNELS:=1}"                                       # used only by *analysis* script
 : "${DPI:=150}"                                          # used only by *plot* script
-: "${LIMIT:=0}"                                          # 0 = no limit
+: "${LIMIT:=0}"                                          # 0 = process all
 # ----------------------------------------------------------------------------
 
 echo "==================== UMICH GREAT LAKES JOB ===================="
@@ -46,7 +46,9 @@ conda activate "${ENV_NAME}"
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 
 # ---------------------- Enumerate matching stems (YAML-driven) --------------
-STEMS=$(python - <<'PY'
+# DIAG lines go to STDERR; only stems are printed to STDOUT (one per line).
+STEMS=$(
+python - <<'PY'
 import os, yaml, pathlib, sys
 cfg = pathlib.Path(os.environ["CONFIG_PATH"])
 y   = yaml.safe_load(cfg.read_text())
@@ -57,7 +59,7 @@ images_dir = pathlib.Path(p.get("data_images_train", "")) if p.get("data_images_
 labels_dir = pathlib.Path(p.get("data_labels_train", "")) if p.get("data_labels_train") else pathlib.Path(turbo_root)/"dataset/train/labels"
 mask_suf   = (y.get("labels", {}) or {}).get("mask_filter")
 
-# DIAGNOSTICS → STDERR (so they don't pollute the stems list)
+# DIAGNOSTICS → STDERR
 print(f"[DIAG] images_dir = {images_dir}", file=sys.stderr)
 print(f"[DIAG] labels_dir = {labels_dir}", file=sys.stderr)
 print(f"[DIAG] mask_suffix = {mask_suf!r}", file=sys.stderr)
@@ -88,13 +90,13 @@ for s in stems[:5]:
 sys.stdout.write("\n".join(stems))
 PY
 )
-# Turn newline-separated stems into bash array
-readarray -t STEM_ARR <<< "$STEMS"
+
+# Turn newline-separated stems into bash array; drop any empty/diagnostic lines just in case.
+readarray -t STEM_ARR <<< "$(printf "%s\n" "$STEMS" | grep -v '^\[DIAG\]' | sed '/^[[:space:]]*$/d')"
 TOTAL=${#STEM_ARR[@]}
 echo "[INFO] Found $TOTAL matching stems."
-
 if (( TOTAL == 0 )); then
-  echo "[WARN] No stems found. Check [DIAG] above (paths & mask suffix)."
+  echo "[WARN] No stems found. Check DIAG lines above (paths & mask suffix)."
   echo "Finish time : $(date)"; echo "Done."; exit 0
 fi
 
@@ -104,13 +106,13 @@ if (( LIMIT > 0 && LIMIT < TOTAL )); then
   TOTAL=${#STEM_ARR[@]}
 fi
 
-# ---------------------- Loop stems (simple, like your 1-image job) ----------
+# ---------------------- Loop stems (same behavior for each) ------------------
 i=0
 for STEM in "${STEM_ARR[@]}"; do
   echo "----------------------------------------------------------------"
   echo ">>> [$i/${TOTAL}] STEM: ${STEM}"
   if [[ "${SCRIPT_NAME}" == "exploratory_plot_images.py" ]]; then
-    # plotting path -> saves under results/qc_panels/ (contract §0)
+    # plotting path -> saves under results/qc_panels/job_<JOBID>/<stem>/
     python -u "${REPO_ROOT}/scripts/${SCRIPT_NAME}" \
       --config "${CONFIG_PATH}" \
       --stem "${STEM}" \
