@@ -107,3 +107,87 @@ def get_label_paths(num_inputs, num_truths, parent_dir):
         label_paths.append(as_path)
 
     return image_paths, label_paths
+
+# ===== Shared image/label helpers (importable across scripts) =====
+
+from tifffile import imread as _tf_imread
+import imageio.v3 as _iio
+import numpy as _np
+from pathlib import Path as _Path
+
+def ensure_hwc_1to5(x, debug=False):
+    """Standardize to HWC; keep 1..5 channels; drop trivial alpha. No resizing."""
+    x = _np.asarray(x)
+    if x.ndim == 2:
+        return x
+    if x.ndim != 3:
+        if debug: print(f"[dl_helper] WARN unexpected ndim={x.ndim}; squeeze.")
+        return _np.squeeze(x)
+    # CHW → HWC if channels-first and H==W
+    if x.shape[0] in (1,2,3,4,5) and x.shape[1] == x.shape[2]:
+        if debug: print(f"[dl_helper] CHW→HWC: {x.shape}")
+        x = _np.moveaxis(x, 0, -1)
+    # drop trivial alpha
+    if x.shape[-1] == 4:
+        a = x[..., 3]
+        near_all_255 = (_np.count_nonzero(a > 250) / a.size) > 0.99
+        near_all_0   = (_np.count_nonzero(a) / a.size) < 0.01
+        if near_all_255 or near_all_0:
+            if debug: print("[dl_helper] drop alpha (RGBA→RGB).")
+            x = x[..., :3]
+    # cap to first 5 channels
+    if x.shape[-1] > 5:
+        if debug: print(f"[dl_helper] WARN {x.shape[-1]} channels > 5; keep first 5.")
+        x = x[..., :5]
+    return x
+
+def has_label(lbl_dir, stem, mask_suffix):
+    """Paired selection using YAML labels.mask_filter first, then common fallbacks."""
+    lbl_dir = _Path(lbl_dir)
+    cands = []
+    if mask_suffix:
+        cands.append(lbl_dir / f"{stem}{mask_suffix}")
+    cands += [
+        lbl_dir / f"{stem}_masks.tif",
+        lbl_dir / f"{stem}.png",
+        lbl_dir / f"{stem}.npy",
+        lbl_dir / f"{stem}_seg.npy",
+    ]
+    return any(p.exists() for p in cands)
+
+def read_label(lbl_path, debug=False):
+    """Robust label read for .npy / PNG(JPG,BMP) / TIFF; collapses RGB mask to first plane."""
+    lbl_path = _Path(lbl_path)
+    suf = lbl_path.suffix.lower()
+    if suf == ".npy":
+        Y = _np.load(lbl_path)
+    elif suf in (".png", ".jpg", ".jpeg", ".bmp"):
+        if debug: print("[dl_helper] imageio.imread label")
+        Y = _iio.imread(lbl_path)
+        if Y.ndim == 3:
+            if debug: print(f"[dl_helper] label RGB(A) → first plane, shape={Y.shape}")
+            Y = Y[..., 0]
+    else:
+        if debug: print("[dl_helper] tifffile.imread label")
+        Y = _tf_imread(lbl_path)
+    return Y
+
+def squish_hwC(x, mode="max"):
+    """Collapse channels → one plane; keep H×W; return float32 in [0,1]."""
+    x = _np.asarray(x)
+    if x.ndim == 2:
+        out = x.astype(_np.float32)
+    else:
+        if mode == "max":
+            out = x.max(axis=-1)
+        elif mode == "mean":
+            out = x.mean(axis=-1)
+        elif mode == "sum":
+            out = x.sum(axis=-1)
+        else:
+            raise ValueError("mode must be max|mean|sum")
+        out = out.astype(_np.float32)
+        mx = float(out.max())
+        if mx > 1.0:
+            out /= (mx if mx > 0 else 1.0)
+    return out
