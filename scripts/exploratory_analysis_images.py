@@ -154,6 +154,47 @@ def main():
     # --- read image file ---
     X = imread(img_p)
 
+    # --- normalize channel layout for N-channel images (N = 1..5) ---
+    # Goal: ensure channels-last (H,W,C) for any per-channel ops (e.g., quantile normalization).
+    if X.ndim == 3:
+        HWC_guess = (X.shape[-1] in (1,2,3,4,5)) and (X.shape[0] != X.shape[-1]) and (X.shape[1] != X.shape[-1])
+        CHW_guess = (X.shape[0]  in (1,2,3,4,5)) and (X.shape[1] == X.shape[2])
+
+        if CHW_guess and not HWC_guess:
+            print(f"[INFO] Detected channels-first layout {X.shape}; converting to channels-last (H,W,C).")
+            X = np.moveaxis(X, 0, -1)  # (C,H,W) -> (H,W,C)
+        elif HWC_guess:
+            print(f"[INFO] Detected channels-last layout {X.shape}.")
+        else:
+            if X.shape[-1] in (1,2,3,4,5):
+                print(f"[WARN] Ambiguous layout {X.shape}; assuming channels-last (H,W,C).")
+            elif X.shape[0] in (1,2,3,4,5):
+                print(f"[WARN] Ambiguous layout {X.shape}; assuming channels-first and converting to HWC.")
+                X = np.moveaxis(X, 0, -1)
+            else:
+                print(f"[WARN] Unexpected 3D shape {X.shape}; proceeding without axis reordering.")
+
+        if X.ndim == 3 and X.shape[-1] == 4:
+            a = X[..., 3]
+            near_all_255 = (np.count_nonzero(a > 250) / a.size) > 0.99
+            near_all_0   = (np.count_nonzero(a) / a.size) < 0.01
+            if near_all_255 or near_all_0:
+                print("[INFO] Dropping alpha channel (RGBA → RGB) based on simple heuristic.")
+                X = X[..., :3]
+            else:
+                print("[INFO] 4 channels detected; keeping all 4 (no alpha drop).")
+
+        if X.ndim == 3 and X.shape[-1] > 5:
+            print(f"[WARN] {X.shape[-1]} channels > 5; keeping first 5 for normalization.")
+            X = X[..., :5]
+
+        print(f"[INFO] Image layout for normalization: {X.shape} (channels-last expected).")
+    else:
+        # 2D single-channel image; nothing to do.
+        pass
+
+
+
     # --- determine how to read the label file (robust and explicit) ---
     suffix = lbl_p.suffix.lower()
     print(f"[INFO] Label file detected: {lbl_p.name}")
