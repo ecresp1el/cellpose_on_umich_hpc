@@ -18,8 +18,10 @@ from tifffile import imread
 import imageio.v3 as iio
 
 from cp_core.plotting.plotter import save_channel_panel, save_img_mask_panel
+from cp_core.helper_functions.dl_helper import ensure_hwc_1to5, has_label, read_label
 
 def find_image_and_label(images_dir: Path, labels_dir: Path, stem: str, mask_suffix: str | None, debug: bool=False):
+    """Find concrete image + label paths (label presence via shared has_label()) and print the same debug trail."""
     # image
     img_path = None
     for ext in (".tif", ".tiff"):
@@ -29,7 +31,7 @@ def find_image_and_label(images_dir: Path, labels_dir: Path, stem: str, mask_suf
     if img_path is None:
         raise FileNotFoundError(f"Image not found for stem '{stem}' in {images_dir}")
 
-    # label candidates (YAML first, then fallbacks)
+    # label (shared pairing rule first, then pick concrete file in the same order)
     candidates = []
     if mask_suffix:
         candidates.append(labels_dir / f"{stem}{mask_suffix}")
@@ -39,7 +41,7 @@ def find_image_and_label(images_dir: Path, labels_dir: Path, stem: str, mask_suf
         labels_dir / f"{stem}.npy",
         labels_dir / f"{stem}_seg.npy",
     ])
-    lbl_path = next((p for p in candidates if p.exists()), None)
+    lbl_path = next((p for p in candidates if p.exists()), None) if has_label(labels_dir, stem, mask_suffix) else None
 
     if debug:
         print("[DEBUG] LABEL RESOLUTION (plot):")
@@ -52,50 +54,6 @@ def find_image_and_label(images_dir: Path, labels_dir: Path, stem: str, mask_suf
         raise FileNotFoundError(f"No label found for stem '{stem}' in {labels_dir}")
     return img_path, lbl_path
 
-def read_label(lbl_path: Path, debug: bool=False) -> np.ndarray:
-    suffix = lbl_path.suffix.lower()
-    print(f"[INFO] Label file: {lbl_path.name} (suffix={suffix})")
-    if suffix == ".npy":
-        if debug: print("[DEBUG] np.load label")
-        Y = np.load(lbl_path)
-    elif suffix in (".png", ".jpg", ".jpeg", ".bmp"):
-        if debug: print("[DEBUG] imageio.imread label")
-        Y = iio.imread(lbl_path)
-        if Y.ndim == 3:
-            if debug: print(f"[DEBUG] label is RGB(A), using first channel → shape={Y.shape}")
-            Y = Y[..., 0]
-    else:
-        if debug: print("[DEBUG] tifffile.imread label")
-        Y = imread(lbl_path)
-    return Y
-
-def ensure_hwc_1to5(X: np.ndarray, debug: bool=False) -> np.ndarray:
-    """Make image HWC, drop dummy alpha, cap to first 5 channels for display."""
-    X = np.asarray(X)
-    if X.ndim == 2:
-        return X
-    if X.ndim != 3:
-        if debug: print(f"[WARN] unexpected ndim={X.ndim}; squeezing.")
-        return np.squeeze(X)
-
-    # CHW → HWC if needed
-    if X.shape[0] in (1,2,3,4,5) and X.shape[1] == X.shape[2]:
-        if debug: print(f"[INFO] CHW→HWC convert for plot: {X.shape}")
-        X = np.moveaxis(X, 0, -1)
-
-    # drop alpha if near-constant
-    if X.shape[-1] == 4:
-        a = X[..., 3]
-        near_all_255 = (np.count_nonzero(a > 250) / a.size) > 0.99
-        near_all_0   = (np.count_nonzero(a) / a.size) < 0.01
-        if near_all_255 or near_all_0:
-            if debug: print("[INFO] Dropping alpha channel (RGBA→RGB).")
-            X = X[..., :3]
-
-    if X.shape[-1] > 5:
-        if debug: print(f"[WARN] {X.shape[-1]} channels > 5; using first 5 for display.")
-        X = X[..., :5]
-    return X
 
 def main():
     ap = argparse.ArgumentParser()
@@ -136,7 +94,7 @@ def main():
     print(f"[STATS] X: shape={X.shape}, dtype={X.dtype}")
     print(f"[STATS] Y: shape={Y.shape}, dtype={Y.dtype}")
 
-    # standardize HWC (1..5 channels) for plotting
+    # standardize HWC (1..5 channels) for plotting (shared helper)
     X = ensure_hwc_1to5(X, debug=args.debug)
     print(f"[INFO] Plotting with HWC layout: {X.shape}")
 
