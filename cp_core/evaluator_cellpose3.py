@@ -285,25 +285,25 @@ class EvaluatorCellpose3:
     def _eval_single(self, model, img: "np.ndarray", args) -> Tuple["np.ndarray", Any, "np.ndarray"]:
         """Run Cellpose v3 eval and return (masks, flows, cellprob).
 
-        Compatible with both 3- and 4-return signatures:
-        (masks, flows, styles)  or  (masks, flows, styles, diams)
-        Extracts the logit/log-prob map from `flows` regardless of key naming across versions.
-        CPU/GPU selection is handled when the model is constructed (load_model).
+        Key points:
+        - Pass a *list* [img] to eval() to avoid CP treating H as batch.
+        - Unwrap the first item from lists returned by CP.
+        - Extract cellprob from flows robustly and fallback to zeros.
         """
         out = model.eval(
-            img,                                 # CP accepts array or list for a single image
+            [img],                               # <-- IMPORTANT: pass a list
             channels=args.channels,
             normalize=args.normalize,
-            rescale=None,                        # no input scaling; keep native grid
+            rescale=None,                        # keep native grid
             niter=args.niter,
             bsize=args.bsize,
             flow_threshold=getattr(args, "flow_threshold", None),
             cellprob_threshold=getattr(args, "cellprob_threshold", None),
         )
 
-        # Accept both 3- and 4-tuple returns
         if not isinstance(out, tuple):
             raise RuntimeError(f"Unexpected eval() return type: {type(out)}")
+
         if len(out) == 4:
             masks, flows, _styles, _diams = out
         elif len(out) == 3:
@@ -311,13 +311,11 @@ class EvaluatorCellpose3:
         else:
             raise RuntimeError(f"Unexpected number of values from eval(): {len(out)}")
 
-        # Some CP builds return lists (one entry per image); unwrap
-        if isinstance(masks, (list, tuple)):
-            masks = masks[0]
-        if isinstance(flows, (list, tuple)):
-            flows = flows[0]
+        # CP returns lists (one per input image) — unwrap index 0
+        masks = masks[0]
+        flows = flows[0]
 
-        # Robust extraction of the cellprob/logit map from `flows`
+        # Extract cellprob / logits robustly
         cellprob = None
         if isinstance(flows, dict):
             for k in ("cellprob", "p", "prob", "P"):
@@ -325,13 +323,12 @@ class EvaluatorCellpose3:
                     cellprob = flows[k]
                     break
         else:
-            # Some variants return a numpy stack (C,H,W); channel 2 is often prob
+            # Some variants return a numpy stack (C,H,W); channel 2 often prob
             if hasattr(flows, "ndim") and flows.ndim >= 3 and flows.shape[0] >= 3:
                 cellprob = flows[2].astype(np.float32, copy=False)
 
-        # Safe fallback: zero logits so downstream saves/panels still work
         if cellprob is None:
-            cellprob = np.zeros_like(masks, dtype=np.float32)
+            cellprob = np.zeros(masks.shape, dtype=np.float32)
 
         return masks, flows, cellprob
 
