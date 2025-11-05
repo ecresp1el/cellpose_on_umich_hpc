@@ -231,6 +231,35 @@ def main():
 
     # Normalize & ensure labeled (print-only)
     Xn = quantile_normalization(X, channels=args.channels).astype(np.float32, copy=False)
+    
+        # --- per-channel stats on Xn (print-only; helps choose eval/train.channels) ---
+    def ch_stats(arr: np.ndarray, name: str = "Xn"):
+        arr = np.asarray(arr)
+        if arr.ndim == 2:
+            # single-channel
+            flat = arr.ravel()
+            nn = flat.size
+            nnz = int(np.count_nonzero(flat))
+            p1, med, p99 = np.percentile(flat, [1, 50, 99])
+            print(f"[CHSTATS] {name}: single-channel  "
+                  f"p1={p1:.4g}  med={med:.4g}  p99={p99:.4g}  nnz_frac={nnz/nn:.4%}")
+            return
+        if arr.ndim == 3:
+            H, W, C = arr.shape
+            C_eff = min(C, 5)  # keep it quick & consistent (1..5)
+            if C > 5:
+                print(f"[WARN] {name}: {C} channels > 5; reporting first 5 only.")
+            for c in range(C_eff):
+                plane = arr[..., c].ravel()
+                nn = plane.size
+                nnz = int(np.count_nonzero(plane))
+                p1, med, p99 = np.percentile(plane, [1, 50, 99])
+                print(f"[CHSTATS] {name}[c{c}]: p1={p1:.4g}  med={med:.4g}  p99={p99:.4g}  nnz_frac={nnz/nn:.4%}")
+        else:
+            print(f"[WARN] {name}: unexpected ndim={arr.ndim}; skipping per-channel stats.")
+
+    ch_stats(Xn, "Xn")
+    
     Yl = ensure_labeled_mask(Y, debug=args.debug)
 
     # Final stats
