@@ -29,7 +29,7 @@ export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 # Build stems (paired with labels) from YAML; stems only to stdout
 STEMS=$(
 python - <<'PY'
-import yaml, pathlib, sys
+import os, yaml, pathlib, sys
 cfg = pathlib.Path(os.environ["CONFIG_PATH"])
 y   = yaml.safe_load(cfg.read_text())
 p   = y.get("paths", {}) or {}
