@@ -457,6 +457,37 @@ results//run_/eval/
 - Supports both GPU and CPU execution (`gpu=True` auto-detect).  
 - Future extension: add Napari viewer launch (`--interactive`) for manual inspection.
 
+Stage C — Evaluation & Artifact Generation (Debug Mode) -- NEED TO DO NEXT 11/4/2025
+
+Goals:
+Ensure Cellpose v3 eval produces correctly shaped outputs and diagnostic visibility for each image.
+
+Instrumentation (always active in Debug Mode):
+	•	Print resolved eval args once at job start.
+	•	For every image:
+	•	image.shape, cellprob.shape, masks.shape, flows_kind, mag.shape.
+	•	cellprob min/max, masks.max, and dtype info.
+	•	One-line numeric summary: [Stage C][file] n_masks=… mask_px=… prob_mean=… prob_max=… pos_frac@thr=…
+	•	Explicit saved … lines for all artifacts (masks, flows, prob, prob_view, rois, panel, summary).
+
+Plotting Rules:
+	•	Always save a panel PNG.
+	•	Prefer boundary overlay (no cp_plot dependency).
+	•	No resizing or cropping; if shapes mismatch, show blank tile and log WARN.
+	•	Flow-magnitude computation must accept both (2,H,W) and (H,W,2) layouts.
+
+Tuning / Exploration:
+	•	Channel sweep: update YAML →
+eval.channels: [1,0] or [2,0] if cellprob min/max = 0/0.
+	•	Threshold smoke-pass:
+flow_threshold: 0.2, cellprob_threshold: -3.0 to visualize weak activations.
+	•	Keep niter = 2000, resample = false, bsize = 512 constant.
+
+Expected outcomes:
+	•	cellprob, masks, and flows all (H,W) per image.
+	•	panel_1x4.png written for every input.
+	•	Non-zero logits once correct channel mapping and thresholds are applied.
+
 
 ### Stage D — Baselines & Re‑Eval
 - **Status:** ☐ NOT READY
