@@ -57,14 +57,15 @@ images_dir = pathlib.Path(p.get("data_images_train", "")) if p.get("data_images_
 labels_dir = pathlib.Path(p.get("data_labels_train", "")) if p.get("data_labels_train") else pathlib.Path(turbo_root)/"dataset/train/labels"
 mask_suf   = (y.get("labels", {}) or {}).get("mask_filter")
 
-print(f"[DIAG] images_dir = {images_dir}")
-print(f"[DIAG] labels_dir = {labels_dir}")
-print(f"[DIAG] mask_suffix = {mask_suf!r}")
+# DIAGNOSTICS → STDERR (so they don't pollute the stems list)
+print(f"[DIAG] images_dir = {images_dir}", file=sys.stderr)
+print(f"[DIAG] labels_dir = {labels_dir}", file=sys.stderr)
+print(f"[DIAG] mask_suffix = {mask_suf!r}", file=sys.stderr)
 
 imgs = sorted(list(images_dir.glob("*.tif")) + list(images_dir.glob("*.tiff")))
-print(f"[DIAG] #image files: {len(imgs)}")
+print(f"[DIAG] #image files: {len(imgs)}", file=sys.stderr)
 lbls = sorted(labels_dir.glob("*"))
-print(f"[DIAG] #label files: {len(lbls)}")
+print(f"[DIAG] #label files: {len(lbls)}", file=sys.stderr)
 
 def has_label(stem:str)->bool:
     cands = []
@@ -79,14 +80,15 @@ def has_label(stem:str)->bool:
     return any(pp.exists() for pp in cands)
 
 stems = [p.stem for p in imgs if has_label(p.stem)]
-print(f"[DIAG] matched stems (image+label): {len(stems)}")
+print(f"[DIAG] matched stems (image+label): {len(stems)}", file=sys.stderr)
 for s in stems[:5]:
-    print("[DIAG] stem example:", s)
+    print("[DIAG] stem example:", s, file=sys.stderr)
 
+# STEMS → STDOUT (one per line)
 sys.stdout.write("\n".join(stems))
 PY
 )
-
+# Turn newline-separated stems into bash array
 readarray -t STEM_ARR <<< "$STEMS"
 TOTAL=${#STEM_ARR[@]}
 echo "[INFO] Found $TOTAL matching stems."
