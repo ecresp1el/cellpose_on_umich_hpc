@@ -427,93 +427,127 @@ class EvaluatorCellpose3:
             cp_io.save_rois(m_u16, str(base))
             written["rois_zip"] = str(base) + ".zip"
             print(f"[Stage C][{stem}] saved rois: {written['rois_zip']}", flush=True)
-
+        
         # -------- 1×4 Panel (input | prob | flow viz | overlay) --------
         if args.save_panels:
             f_panel = self.d_panels / f"{stem}_panel_1x4.png"
+            
             try:
-                # Always build a panel and save it, regardless of flows/cp_plot status
                 import matplotlib
                 matplotlib.use("Agg")  # headless on HPC
                 import matplotlib.pyplot as plt
 
-                fig, axs = plt.subplots(1, 4, figsize=(16, 4))
+                # --- diagnostics: print what we are going to plot ---
+                print(f"[Panel][{stem}] image.shape={getattr(image, 'shape', None)} "
+                    f"cellprob.shape={getattr(cellprob, 'shape', None)} "
+                    f"masks.shape={getattr(masks, 'shape', None)}", flush=True)
+                print(f"[Panel][{stem}] image.dtype={getattr(image, 'dtype', None)} "
+                    f"cellprob.dtype={getattr(cellprob, 'dtype', None)} "
+                    f"masks.max={int(m_u16.max())}", flush=True)
+                try:
+                    print(f"[Panel][{stem}] cellprob min/max = "
+                        f"{float(np.min(cellprob)):.3f} / {float(np.max(cellprob)):.3f}", flush=True)
+                except Exception:
+                    pass
 
-                # (1) input (contrast-limited)
-                im0 = self._auto_contrast(image)
-                axs[0].imshow(im0, cmap="gray")
-                axs[0].set_title("input")
-                axs[0].axis("off")
-
-                # (2) prob (logit) - plot as-is; it's fine if scale is wide
-                axs[1].imshow(cellprob, cmap="gray")
-                axs[1].set_title("prob (logit)")
-                axs[1].axis("off")
-
-                # (3) flow magnitude - robust to dict / ndarray / list
+                # flow magnitude (dict vs ndarray vs none), with logging
                 mag = None
+                flows_kind = "none"
                 _flows = flows[0] if isinstance(flows, (list, tuple)) else flows
                 if isinstance(_flows, dict) and isinstance(_flows.get("dP", None), np.ndarray):
                     dP = _flows["dP"]
+                    flows_kind = "dict"
                     if dP.ndim == 3 and dP.shape[0] >= 2:
                         mag = np.sqrt(dP[0] ** 2 + dP[1] ** 2)
                 elif hasattr(_flows, "ndim") and _flows.ndim >= 3 and _flows.shape[0] >= 2:
                     dP = _flows[:2]
+                    flows_kind = "ndarray"
                     mag = np.sqrt(dP[0] ** 2 + dP[1] ** 2)
-                if mag is not None:
-                    axs[2].imshow(mag, cmap="gray")
+
+                print(f"[Panel][{stem}] flows_kind={flows_kind} "
+                    f"mag.shape={getattr(mag, 'shape', None)}", flush=True)
+
+                # We do NOT resize/pad; we only plot if shapes match the input’s HxW
+                H = image.shape[0] if image.ndim >= 2 else None
+                W = image.shape[1] if image.ndim >= 2 else None
+                ok_prob = (hasattr(cellprob, "shape") and cellprob.shape[:2] == (H, W))
+                ok_mag  = (hasattr(mag, "shape")      and mag.shape[:2]       == (H, W))
+
+                fig, axs = plt.subplots(1, 4, figsize=(16, 4))
+
+                # (1) input (contrast-limited)
+                axs[0].imshow(self._auto_contrast(image), cmap="gray")
+                axs[0].set_title("input"); axs[0].axis("off")
+
+                # (2) prob (logit) or “no-prob”
+                if ok_prob:
+                    axs[1].imshow(cellprob, cmap="gray")
+                    axs[1].set_title("prob (logit)")
                 else:
-                    # show a blank panel with a hint
-                    axs[2].imshow(np.zeros(im0.shape[:2], dtype=np.float32), cmap="gray")
-                axs[2].set_title("flow mag")
+                    axs[1].imshow(np.zeros((H, W), dtype=np.float32), cmap="gray")
+                    axs[1].set_title("prob (missing)")
+                    print(f"[Panel][{stem}] WARN: prob.shape {getattr(cellprob,'shape',None)} "
+                        f"!= image HxW {(H, W)}; showing blank", flush=True)
+                axs[1].axis("off")
+
+                # (3) flow magnitude or “no-flow”
+                if ok_mag:
+                    axs[2].imshow(mag, cmap="gray")
+                    axs[2].set_title("flow mag")
+                else:
+                    axs[2].imshow(np.zeros((H, W), dtype=np.float32), cmap="gray")
+                    axs[2].set_title("flow (missing)")
+                    if mag is None:
+                        print(f"[Panel][{stem}] INFO: no flow magnitude available", flush=True)
+                    else:
+                        print(f"[Panel][{stem}] WARN: mag.shape {getattr(mag,'shape',None)} "
+                            f"!= image HxW {(H, W)}; showing blank", flush=True)
                 axs[2].axis("off")
 
-                # (4) overlay - try Cellpose helper; fall back to boundary contour
-                overlay_title = f"overlay (n={n_masks})"
-                drawn = False
+                # (4) overlay — try cp_plot; else draw boundary; else just input
+                overlay_title = f"overlay (n={int(m_u16.max())})"
+                overlay_done = False
                 try:
-                    if cp_plot is not None and hasattr(cp_plot, "show_segmentation"):
+                    if cp_plot is not None and hasattr(cp_plot, "show_segmentation") and image.ndim >= 2:
                         flows_for_plot = _flows if isinstance(_flows, dict) else None
-                        cp_plot.show_segmentation(
-                            image, masks, flows_for_plot,
-                            channels=self.cfg.eval.get("channels", [0, 0]),
-                            ax=axs[3]
-                        )
-                        drawn = True
-                except Exception:
-                    drawn = False
+                        # IMPORTANT: cp_plot expects (H,W) or (H,W,C); we already ensured image is that in _read_image
+                        cp_plot.show_segmentation(image, masks, flows_for_plot,
+                                                channels=self.cfg.eval.get("channels", [0, 0]),
+                                                ax=axs[3])
+                        overlay_done = True
+                        print(f"[Panel][{stem}] overlay via cp_plot.show_segmentation()", flush=True)
+                except Exception as e:
+                    print(f"[Panel][{stem}] overlay cp_plot failed: {e}", flush=True)
 
-                if not drawn:
+                if not overlay_done:
                     bnd = self._boundary_from_labels(m_u16)
-                    axs[3].imshow(im0, cmap="gray")
-                    # Only draw contour if there is at least one boundary pixel
+                    axs[3].imshow(self._auto_contrast(image), cmap="gray")
                     if bnd.any():
                         axs[3].contour(bnd, colors="r", linewidths=0.5)
-                axs[3].set_title(overlay_title)
+                        print(f"[Panel][{stem}] overlay via boundary contour", flush=True)
+                    else:
+                        print(f"[Panel][{stem}] overlay fallback: no boundaries, showing input only", flush=True)
+                    axs[3].set_title(overlay_title)
                 axs[3].axis("off")
 
                 fig.tight_layout()
                 fig.savefig(str(f_panel), dpi=200)
                 plt.close(fig)
                 written["panel_png"] = str(f_panel)
-                print(f"[Stage C][{stem}] saved panel: {f_panel}", flush=True)
+                print(f"[Panel][{stem}] saved panel: {f_panel}", flush=True)
+
             except Exception as e:
-                # Minimal fallback: always write at least a single-frame input preview
+                # Last-resort minimal panel (just input), still write something
                 try:
-                    import matplotlib
-                    matplotlib.use("Agg")
-                    import matplotlib.pyplot as plt
-                    fig, ax = plt.subplots(1, 1, figsize=(4, 4))
-                    ax.imshow(self._auto_contrast(image), cmap="gray")
-                    ax.set_title(f"input (fallback, n={n_masks})")
-                    ax.axis("off")
-                    fig.tight_layout()
-                    fig.savefig(str(f_panel), dpi=200)
-                    plt.close(fig)
+                    import imageio
+                    im0 = self._auto_contrast(image)
+                    if im0.ndim == 2:
+                        im0 = (np.stack([im0]*3, axis=-1) * 255).astype(np.uint8)
+                    imageio.imwrite(str(f_panel), im0)
                     written["panel_png"] = str(f_panel)
-                    print(f"[Stage C][{stem}] saved minimal panel (fallback): {f_panel}", flush=True)
+                    print(f"[Panel][{stem}] saved minimal panel (input only): {f_panel}", flush=True)
                 except Exception as ee:
-                    print(f"[Stage C][{stem}] panel save failed: {ee}", flush=True)
+                    print(f"[Panel][{stem}] panel save failed completely: {ee}", flush=True)
 
         # -------------------- 6) JSON SUMMARY --------------------
         f_json = self.d_json / f"{stem}_summary.json"
