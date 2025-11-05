@@ -59,71 +59,39 @@ from cp_core.experiment import WholeOrganoidExperiment
 # Optional pre-train hook: prefer single-channel “squished” train images
 # -------------------------------------------------------------
 def prefer_squished_train_images(cfg: dict) -> None:
-    """
-    If a single-channel 'squished' TRAIN images folder exists, repoint
-    cfg['paths']['data_images_train'] to it. Labels remain unchanged.
-    Prints exactly what was replaced and how many images are paired with labels.
-
-    Search order under the *parent* of data_images_train:
-      1) cfg['preprocess']['squish']['out_subdir'] (if provided)
-      2) images_squish_max
-      3) images_squish_mean
-      4) images_squish_sum
-    """
     paths = cfg.get("paths", {}) or {}
     labels_cfg = cfg.get("labels", {}) or {}
+    train_imgs = Path(paths.get("data_images_train",""))
+    train_lbls = Path(paths.get("data_labels_train",""))
+    if not train_imgs.exists() or not train_lbls.exists():
+        print(f"[squish] TRAIN images or labels missing; no replacement"); return
 
-    train_imgs = Path(paths.get("data_images_train", ""))
-    train_lbls = Path(paths.get("data_labels_train", ""))
-
-    if not train_imgs.exists():
-        print(f"[squish] TRAIN images dir not found: {train_imgs}  (no replacement)")
-        return
-    if not train_lbls.exists():
-        print(f"[squish] TRAIN labels dir not found: {train_lbls}  (no replacement)")
-        return
-
-    # Candidate squished subdirs next to the current train images dir
     prefer = ((cfg.get("preprocess") or {}).get("squish") or {}).get("out_subdir")
-    candidates = []
-    if prefer:
-        candidates.append(train_imgs.parent / prefer)
-    candidates += [
+    cands = [train_imgs.parent / s for s in ([prefer] if prefer else [])] + [
         train_imgs.parent / "images_squish_max",
         train_imgs.parent / "images_squish_mean",
         train_imgs.parent / "images_squish_sum",
     ]
 
     pick = None
-    for cand in candidates:
-        if cand.exists():
-            n = len(list(cand.glob("*.tif"))) + len(list(cand.glob("*.tiff")))
-            if n > 0:
-                pick = cand
-                break
-
-    if pick is None:
-        print("[squish] No squished TRAIN folder found next to",
-              train_imgs, "\n          looked for:",
-              ", ".join(str(c) for c in candidates))
+    for c in cands:
+        if c.exists() and (len(list(c.glob("*.tif")))+len(list(c.glob("*.tiff"))))>0:
+            pick = c; break
+    if not pick:
+        print("[squish] No squished TRAIN folder found next to", train_imgs, "looked for:",
+              ", ".join(str(x) for x in cands))
         return
 
-    # Count how many squished images have labels
-    def has_label(stem: str) -> bool:
+    def _has_label(stem: str) -> bool:
         suf = labels_cfg.get("mask_filter")
-        cands = []
-        if suf: cands.append(train_lbls / f"{stem}{suf}")
-        cands += [
-            train_lbls / f"{stem}_masks.tif",
-            train_lbls / f"{stem}.png",
-            train_lbls / f"{stem}.npy",
-            train_lbls / f"{stem}_seg.npy",
-        ]
-        return any(p.exists() for p in cands)
+        LL = [train_lbls/f"{stem}{suf}"] if suf else []
+        LL += [train_lbls/f"{stem}_masks.tif", train_lbls/f"{stem}.png",
+               train_lbls/f"{stem}.npy", train_lbls/f"{stem}_seg.npy"]
+        return any(p.exists() for p in LL)
 
     imgs = sorted(list(pick.glob("*.tif")) + list(pick.glob("*.tiff")))
     n_images = len(imgs)
-    n_paired = sum(1 for p in imgs if has_label(p.stem))
+    n_paired = sum(1 for p in imgs if _has_label(p.stem))
 
     print(f"[squish] FOUND squished TRAIN folder: {pick}")
     print(f"[squish] images={n_images}  paired_with_labels={n_paired}  labels_dir={train_lbls}")
@@ -133,13 +101,9 @@ def prefer_squished_train_images(cfg: dict) -> None:
     cfg["paths"] = paths
     print(f"[squish] REPLACED train images dir:\n          {prev}\n          → {pick}")
 
-    # Enforce single-channel usage since images are now 1-channel
-    if (cfg.get("train", {}) or {}).get("channels") != [0, 0]:
-        cfg.setdefault("train", {}).update({"channels": [0, 0]})
-        print("[squish] Set train.channels → [0, 0] (single-channel).")
-    if (cfg.get("eval", {}) or {}).get("channels") != [0, 0]:
-        cfg.setdefault("eval", {}).update({"channels": [0, 0]})
-        print("[squish] Set eval.channels  → [0, 0] (single-channel).")
+    cfg.setdefault("train",{}).update({"channels":[0,0]})
+    cfg.setdefault("eval", {}).update({"channels":[0,0]})
+    print("[squish] Enforced single-channel: train/eval.channels → [0,0]")
 
 
 def parse_args():
@@ -216,14 +180,10 @@ def main():
     # Load validated configuration (raises if YAML missing or malformed)
     cfg = ConfigStore.load_from_yaml(a.config)
     
-    # >>> squished train images auto-replacement (prints what it does)
-    if a.mode in ("prepare", "full-train"):
+    if a.mode in ("prepare","full-train"):
         prefer_squished_train_images(cfg)
     elif a.mode == "train":
-        # You’re resuming into an existing run_dir; snapshot in run_dir/cfg controls paths.
-        # We still show what we *would* replace, but actual Train uses the snapshot.
-        print("[squish] NOTE: --mode train (resume) uses the run_dir snapshot; "
-              "this in-memory replacement applies to prepare/full-train.")
+        print("[squish] NOTE: --mode train uses run_dir snapshot; in-memory swap applies to prepare/full-train.")
 
     # Initialize experiment wrapper with config (creates a *new* run_dir on prepare/full-train)
     exp = WholeOrganoidExperiment(cfg)
