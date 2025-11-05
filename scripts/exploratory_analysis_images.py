@@ -1,23 +1,41 @@
 #!/usr/bin/env python3
 """
 Exploratory reader (print-only) driven by the project YAML.
-- Loads ONE training image + its label using YAML paths (contract §3 config keys)
-- Applies quantile_normalization (TNIA-style)
-- Ensures mask is integer-labeled
-- Prints detailed stats when --debug is set
-- NO writing, NO plotting
+
+Behavior:
+- Load ONE training image + its label using YAML paths (preferred).
+- Prefer labels.mask_filter from YAML for the label filename suffix (intended behavior).
+- If not found or not provided, fall back to common suffixes.
+- Apply quantile_normalization (TNIA-style) to the image.
+- Ensure label is integer-labeled (uint16).
+- Print detailed stats; NO writing and NO plotting.
+
+Usage (example):
+  python scripts/exploratory_analysis_images.py \
+    --config /path/to/config.yaml \
+    --stem "MyImage_001" \
+    --channels \
+    --debug
 """
+
 from __future__ import annotations
-import argparse, json
+import argparse
 from pathlib import Path
 import numpy as np
+import yaml
 from tifffile import imread
 from skimage.measure import label as sk_label
-import yaml
 
+# Your adapted TNIA helper
 from cp_core.helper_functions.dl_helper import quantile_normalization
 
+
+# ---------------------- helpers ----------------------
 def ensure_labeled_mask(Y: np.ndarray, debug: bool=False) -> np.ndarray:
+    """
+    Convert a binary/boolean mask to labeled (uint16) if needed.
+    If already labeled, coerce dtype to uint16 for consistency.
+    """
     if Y.dtype == bool or (Y.ndim == 2 and np.unique(Y).size <= 3):
         Ylab = sk_label(Y > 0).astype(np.uint16, copy=False)
         if debug:
@@ -27,84 +45,133 @@ def ensure_labeled_mask(Y: np.ndarray, debug: bool=False) -> np.ndarray:
         Y = Y.astype(np.uint16, copy=False)
     return Y
 
-def find_image_and_label(images_dir: Path, labels_dir: Path, stem: str, debug: bool=False):
-    # image
+
+def find_image_and_label(
+    images_dir: Path,
+    labels_dir: Path,
+    stem: str,
+    mask_suffix: str | None,
+    debug: bool=False
+) -> tuple[Path, Path]:
+    """
+    Resolve image and label paths given a stem.
+
+    Resolution order for LABEL:
+      1) If YAML provided labels.mask_filter (e.g., '_cp_masks.png'), prefer stem + that suffix.
+      2) Otherwise, try common fallbacks in this order:
+         <stem>_masks.tif, <stem>.png, <stem>.npy, <stem>_seg.npy
+
+    Prints exactly which rule was used when debug=True.
+    """
+    # Image: try .tif then .tiff
     img_path = None
     for ext in (".tif", ".tiff"):
         p = images_dir / f"{stem}{ext}"
         if p.exists():
-            img_path = p; break
+            img_path = p
+            break
     if img_path is None:
         raise FileNotFoundError(f"Image not found for stem '{stem}' in {images_dir}")
 
-    # label candidates (cover common conventions)
-    candidates = [
+    # Label: YAML-driven suffix first (intended behavior)
+    candidates: list[Path] = []
+    if mask_suffix:
+        candidates.append(labels_dir / f"{stem}{mask_suffix}")
+
+    # Fallbacks (robust to common conventions)
+    candidates.extend([
         labels_dir / f"{stem}_masks.tif",
         labels_dir / f"{stem}.png",
         labels_dir / f"{stem}.npy",
         labels_dir / f"{stem}_seg.npy",
-    ]
+    ])
+
     lbl_path = next((p for p in candidates if p.exists()), None)
-    if lbl_path is None:
-        raise FileNotFoundError(f"No label found for stem '{stem}' in {labels_dir}")
 
     if debug:
-        print(f"[PATH] X: {img_path}")
-        print(f"[PATH] Y: {lbl_path}")
+        print("[DEBUG] LABEL RESOLUTION:")
+        print(f"  - YAML mask_suffix: {mask_suffix!r} (preferred if present)")
+        print("  - Candidate order:")
+        for c in candidates:
+            print(f"      {c}")
+        if lbl_path:
+            print(f"  -> SELECTED: {lbl_path}")
+        else:
+            print("  -> No candidate found")
+
+    if lbl_path is None:
+        raise FileNotFoundError(
+            f"No label found for stem '{stem}' in {labels_dir}. "
+            f"(Checked YAML suffix first, then fallbacks.)"
+        )
+
     return img_path, lbl_path
+
 
 def pstats(name: str, arr: np.ndarray):
     arr = np.asarray(arr)
     nnz = int(np.count_nonzero(arr))
-    a_min, a_max, a_mean = float(arr.min()), float(arr.max()), float(arr.mean())
+    a_min = float(arr.min()); a_max = float(arr.max()); a_mean = float(arr.mean())
     print(f"[STATS] {name:>3}: shape={arr.shape} dtype={arr.dtype} "
           f"min={a_min:.4g} max={a_max:.4g} mean={a_mean:.4g} nnz={nnz}")
 
+
+# ---------------------- main ----------------------
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", required=True, help="Path to YAML config (contract §3)")
-    ap.add_argument("--stem", required=True, help="File stem (no extension)")
+    ap.add_argument("--config", required=True, help="Path to YAML config (source of truth for paths).")
+    ap.add_argument("--stem", required=True, help="File stem (no extension).")
     ap.add_argument("--channels", action="store_true",
-                    help="Per-channel normalization if X has channels (H,W,C)")
-    ap.add_argument("--debug", action="store_true", help="Verbose prints")
+                    help="Per-channel normalization if X has channels (H,W,C).")
+    ap.add_argument("--debug", action="store_true", help="Verbose prints.")
     args = ap.parse_args()
 
     cfg_path = Path(args.config)
     if args.debug:
         print(f"[INFO] Loading YAML: {cfg_path}")
+
     y = yaml.safe_load(cfg_path.read_text())
 
-    # Prefer explicit YAML paths; otherwise fall back to contract tree
-    # paths.* keys defined in contract §3 (data_images_train, data_labels_train)  [oai_citation:0‡CONTRACT_Methods_Cellpose3_WholeOrganoid_Pipeline.md](file-service://file-BQjntqRVfAzTEQqVdkGoYs)
-    p = y.get("paths", {})
-    images_dir = Path(p.get("data_images_train", "") or
-                      (p.get("turbo_root", "/nfs/turbo/umms-parent/cellpose_wholeorganoid_model") + "/dataset/train/images"))
-    labels_dir = Path(p.get("data_labels_train", "") or
-                      (p.get("turbo_root", "/nfs/turbo/umms-parent/cellpose_wholeorganoid_model") + "/dataset/train/labels"))
+    # Prefer explicit YAML paths (contract §3). Fall back to canonical tree if missing.
+    p = y.get("paths", {}) or {}
+    turbo_root = p.get("turbo_root", "/nfs/turbo/umms-parent/cellpose_wholeorganoid_model")
+    images_dir = Path(p.get("data_images_train", "")) if p.get("data_images_train") else Path(turbo_root) / "dataset/train/images"
+    labels_dir = Path(p.get("data_labels_train", "")) if p.get("data_labels_train") else Path(turbo_root) / "dataset/train/labels"
+
+    # YAML-defined mask suffix (intended behavior)
+    mask_suffix = (y.get("labels", {}) or {}).get("mask_filter")
 
     if args.debug:
         print("[INFO] Train images dir:", images_dir)
         print("[INFO] Train labels dir:", labels_dir)
+        print("[INFO] YAML labels.mask_filter:", repr(mask_suffix), "(preferred)")
         print("[INFO] Stem           :", args.stem)
         print("[INFO] Channels norm  :", args.channels)
 
-    img_p, lbl_p = find_image_and_label(images_dir, labels_dir, args.stem, debug=args.debug)
+    # Resolve paths (YAML suffix preferred; fallbacks if needed)
+    img_p, lbl_p = find_image_and_label(images_dir, labels_dir, args.stem, mask_suffix, debug=args.debug)
 
-    # read
+    # Read arrays
     X = imread(img_p)
-    Y = np.load(lbl_p) if lbl_p.suffix == ".npy" else imread(lbl_p)
+    if lbl_p.suffix == ".npy":
+        Y = np.load(lbl_p)
+    else:
+        Y = imread(lbl_p)
 
     if args.debug:
+        print(f"[PATH] X: {img_p}")
+        print(f"[PATH] Y: {lbl_p}")
         pstats("X", X)
         pstats("Yraw", Y)
 
-    # normalize & ensure labeled
+    # Normalize & ensure labeled (print-only)
     Xn = quantile_normalization(X, channels=args.channels).astype(np.float32, copy=False)
     Yl = ensure_labeled_mask(Y, debug=args.debug)
 
-    # final stats
+    # Final stats
     pstats("Xn", Xn)
     pstats("Yl", Yl)
+
 
 if __name__ == "__main__":
     main()
