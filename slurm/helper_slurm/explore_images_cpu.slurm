@@ -41,7 +41,8 @@ fi
 conda activate "${ENV_NAME}"
 
 # Make repository code importable (so 'from cp_core....' works)
-export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH}"
+# Option A (preferred): safe prepend with default empty
+export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 
 # ---------------------- PYTHON ENVIRONMENT DEBUG (for clarity) --------------
 echo
