@@ -27,6 +27,9 @@ else
 fi
 conda activate "${ENV_NAME}"
 
+# Install the minimial scientific Python stack if not already available
+pip install numpy tifffile scikit-image pyyaml
+
 echo "=== EXPLORE (print-only) ==="
 echo "Host : $(hostname)"
 echo "Stem : ${STEM}"
