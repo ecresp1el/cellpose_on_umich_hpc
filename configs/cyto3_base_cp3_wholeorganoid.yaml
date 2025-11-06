@@ -22,3 +22,5 @@ train:
   diameter: 1350
   bsize: 512
   channels: [0, 0]
+
+  eval:
