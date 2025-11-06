@@ -23,4 +23,4 @@ train:
   bsize: 512
   channels: [0, 0]
 
-  eval:
+eval:
