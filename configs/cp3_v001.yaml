@@ -13,6 +13,7 @@ labels:
   mask_filter: _cp_masks.png
 
 train:
+  baseline_pretrained: true    # ← NEW: use baseline pretrained weights
   use_pretrained: true          # cyto3 fine-tune by default
   model_type: cyto3             # or null for scratch
   rescale: false                # specialist policy

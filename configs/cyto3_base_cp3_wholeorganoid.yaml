@@ -1,0 +1,24 @@
+model_name_out: cyto3_base_cp3_wholeorganoid
+
+paths:
+  turbo_root: /nfs/turbo/umms-parent/cellpose_wholeorganoid_model
+  data_images_train: /nfs/turbo/umms-parent/cellpose_wholeorganoid_model/dataset/train/images
+  data_labels_train: /nfs/turbo/umms-parent/cellpose_wholeorganoid_model/dataset/train/labels
+  data_images_valid: /nfs/turbo/umms-parent/cellpose_wholeorganoid_model/dataset/valid/images
+  data_labels_valid: /nfs/turbo/umms-parent/cellpose_wholeorganoid_model/dataset/valid/labels
+  results_root: /nfs/turbo/umms-parent/cellpose_wholeorganoid_model/results
+  logs_root: /nfs/turbo/umms-parent/cellpose_wholeorganoid_model/logs
+
+labels:
+  mask_filter: _cp_masks.png
+
+
+# Minimal training block (kept so ConfigStore validation passes).
+# Not used by 'prepare', but required by your schema.
+train:
+  use_pretrained: true    # initialize from official cyto3
+  model_type: cyto3
+  rescale: false
+  diameter: 1350
+  bsize: 512
+  channels: [0, 0]
