@@ -6,10 +6,11 @@
 
 #SBATCH --job-name=cp3_eval_cpu
 #SBATCH --account=parent0
-#SBATCH --partition=standard          # CPU queue → usually schedules faster
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=24G
-#SBATCH --time=00:20:00               # short walltime for quick turn-around
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=32G
+#SBATCH --time=02:00:00
 #SBATCH --output=/nfs/turbo/umms-parent/cellpose_wholeorganoid_model/logs/slurm/%x_%j.out
 #SBATCH --error=/nfs/turbo/umms-parent/cellpose_wholeorganoid_model/logs/slurm/%x_%j.err
 
