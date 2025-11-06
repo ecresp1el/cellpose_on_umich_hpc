@@ -24,5 +24,12 @@ train:
   channels: [0, 0]
 
 eval:
+  use_pretrained: true
+  model_type: cyto3
+  rescale: false
+  bsize: 512
+  diameter: 1350
+  channels: [0, 0]
+
 
 system: 
