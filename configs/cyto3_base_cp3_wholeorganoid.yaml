@@ -26,6 +26,7 @@ train:
 eval:
   use_pretrained: true
   model_type: cyto3
+  baseline_pretrained: true     # 👈 ensures we use vanilla cyto3
   rescale: false
   bsize: 512
   diameter: 1350
