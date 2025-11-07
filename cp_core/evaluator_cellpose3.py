@@ -31,6 +31,10 @@ except Exception as e:
     cp_io = None
     cp_plot = None
 
+# Reuse standardized I/O + layout helpers (single source of truth)
+from cp_core.helper_functions.dl_helper import ensure_hwc_1to5, has_label, read_label
+from cp_core.dataset import DatasetManager
+
 # ---------- small image I/O helpers ----------
 def _imsave_tif(path: Path, arr: np.ndarray) -> None:
     """Write TIFF (float32/uint16). Uses cellpose.io if available, else imageio."""
@@ -223,12 +227,23 @@ class EvaluatorCellpose3:
             Aggregate stats for eval_summary.json
         """
         # discover images
-        from .dataset import DatasetManager
         dm = DatasetManager(self.cfg.paths, self.cfg.labels, self.run_dir / "cfg")
         if split not in ("valid", "all"):
             split = "valid"
         
         image_paths = dm.list_images(split if split in ("valid",) else "all")
+        
+        # NEW: confirm snapshot sources and what's enumerated
+        try:
+            img_root = getattr(self.cfg.paths, "data_images_train", None)
+            lbl_root = getattr(self.cfg.paths, "data_labels_train", None)
+            mask_sfx = getattr(self.cfg.labels, "mask_filter", None)
+            print(f"[EVAL] enumerating images from snapshot: {img_root}", flush=True)
+            print(f"[EVAL] labels_dir={lbl_root}  mask_suffix={mask_sfx}", flush=True)
+            if len(image_paths) > 0:
+                print("[EVAL] first 3 stems:", [p.stem for p in image_paths[:3]], flush=True)
+        except Exception:
+            pass
 
         # log what we’re using for this run
         print(
@@ -257,6 +272,11 @@ class EvaluatorCellpose3:
         
         for ip in image_paths:
             img = self._read_image(ip)
+            # NEW: effective shape used by CP3 given channels
+            H, W = img.shape[:2]
+            used_shape = (H, W) if args.channels == [0, 0] else (H, W, img.shape[-1])
+            print(f"[EVAL][{ip.stem}] img.shape={tuple(img.shape)}  channels={args.channels}  used_shape={used_shape}",
+                flush=True)
             masks, flows, cellprob = self._eval_single(model, img, args)
             paths_written = self._save_artifacts(ip, img, masks, flows, cellprob, args)
 
@@ -282,7 +302,7 @@ class EvaluatorCellpose3:
                 "prob_mean": prob_mean,
                 "prob_max": prob_max,
                 "pos_frac": pos_frac,
-                "shape": list(img.shape),
+                "shape": list(used_shape),
             })
             n_done += 1
             
@@ -318,10 +338,12 @@ class EvaluatorCellpose3:
 
     # -------------------- helpers --------------------
     def _read_image(self, path: Path) -> np.ndarray:
-        """Read an image and return either (H, W) or (H, W, C).
+        """Read an image and return channel-last (H,W[,C]) standardized for CP3.
 
-        Cellpose expects grayscale (H,W) or channel-last color (H,W,C).
-        Some of your TIFFs load as channel-first (C,H,W); we move channels last.
+        Standardization:
+        - Enforces channel-last layout (CHW→HWC if needed)
+        - Drops trivial alpha planes
+        - Caps to ≤ 5 channels
         """
         if cp_io is not None and hasattr(cp_io, "imread"):
             arr = cp_io.imread(str(path))
@@ -329,15 +351,8 @@ class EvaluatorCellpose3:
             import imageio
             arr = imageio.imread(str(path))
 
-        # (H, W, 1) → (H, W)
-        if getattr(arr, "ndim", 2) == 3 and arr.shape[-1] == 1:
-            arr = arr[..., 0]
-
-        # (C, H, W) → (H, W, C)
-        if getattr(arr, "ndim", 2) == 3 and arr.shape[0] in (2, 3, 4) and arr.shape[-1] not in (2, 3, 4):
-            import numpy as np
-            arr = np.moveaxis(arr, 0, -1)
-
+        # Single, authoritative standardization (replaces ad-hoc squeezes/moveaxis)
+        arr = ensure_hwc_1to5(arr, debug=False)
         return arr
 
     def _eval_single(self, model, img: "np.ndarray", args) -> Tuple["np.ndarray", Any, "np.ndarray"]:
