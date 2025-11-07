@@ -22,6 +22,7 @@ import json
 import math
 import csv
 
+from matplotlib import pyplot as plt
 import numpy as np
 
 from cellpose import models, io as cp_io, plot
@@ -436,28 +437,33 @@ class EvaluatorCellpose3:
 
         # ---------- 2) 1×4 Segmentation Panel via Cellpose API ----------
         try:
-            # Define panel output path
+            # Output path for the panel
             f_panel = self.d_panels / f"{stem}_panel_1x4.png"
 
-            # Use official Cellpose plotting API (no custom matplotlib logic)
-            fig = plot.show_segmentation(
-                image=image,
-                masks=masks,
-                flows=flows if isinstance(flows, dict) else None,
-                channels=self.cfg.eval.get("channels", [0, 0]),
-                title=f"{stem} (n={int(masks.max())})",
+            # Convert CP3-style dict flows to RGB flow (optional but recommended for display)
+            flow_rgb = None
+            if isinstance(flows, dict) and "dP" in flows:
+                # flows['dP'] is (2, H, W) → convert to RGB flow visualization
+                flow_rgb = plot.dx_to_circ(flows["dP"])
+
+            # Create a figure handle for Cellpose’s plotting function
+            fig = plt.figure(figsize=(12, 5))
+
+            # Use positional args per CP3 API: (fig, img, maski, flowi, channels, file_name)
+            plot.show_segmentation(
+                fig,
+                image,
+                masks,
+                flow_rgb,
+                self.cfg.eval.get("channels", [0, 0]),
+                str(f_panel)  # file_name → Cellpose saves the panels directly
             )
 
-            # If Cellpose returned a matplotlib Figure, save it directly
-            if hasattr(fig, "savefig"):
-                fig.savefig(str(f_panel), dpi=200, bbox_inches="tight")
-                print(f"[Panel][{stem}] saved panel: {f_panel}", flush=True)
-                written["panel_png"] = str(f_panel)
-            else:
-                print(f"[Panel][{stem}] WARN: plot.show_segmentation() did not return a Figure object", flush=True)
+            plt.close(fig)
+            written["panel_png"] = str(f_panel)
+            print(f"[Panel][{stem}] saved panel: {f_panel}", flush=True)
 
         except Exception as e:
-            # If plotting fails, log the warning but do not interrupt the run
             print(f"[Panel][{stem}] WARN: plot.show_segmentation failed: {e}", flush=True)
 
         # ---------- 3) Optional ROIs ----------
