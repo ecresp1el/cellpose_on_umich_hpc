@@ -202,7 +202,7 @@ class EvaluatorCellpose3:
             f"No model found at {self.cp_model_dir} or {self.fallback_weights}"
         )
 
-    # -------------------- evaluation --------------------
+        # -------------------- evaluation --------------------
     def evaluate_images(self, split: str, args: EvalArgs) -> Dict[str, Any]:
         """Run inference on a dataset split ('valid' or 'all') and write artifacts.
 
@@ -211,26 +211,32 @@ class EvaluatorCellpose3:
         dict
             Aggregate stats for eval_summary.json
         """
-        # discover images
-        dm = DatasetManager(self.cfg.paths, self.cfg.labels, self.run_dir / "cfg")
-        if split not in ("valid", "all"):
-            split = "valid"
-        
-        image_paths = dm.list_images(split if split in ("valid",) else "all")
-        
-        # NEW: confirm snapshot sources and what's enumerated
-        try:
-            img_root = getattr(self.cfg.paths, "data_images_train", None)
-            lbl_root = getattr(self.cfg.paths, "data_labels_train", None)
-            mask_sfx = getattr(self.cfg.labels, "mask_filter", None)
-            print(f"[EVAL] enumerating images from snapshot: {img_root}", flush=True)
-            print(f"[EVAL] labels_dir={lbl_root}  mask_suffix={mask_sfx}", flush=True)
-            if len(image_paths) > 0:
-                print("[EVAL] first 3 stems:", [p.stem for p in image_paths[:3]], flush=True)
-        except Exception:
-            pass
+        # ---------------- discover images from the SNAPSHOT (not source YAML) ----------------
+        split = "valid" if split not in ("valid", "all") else split
 
-        # log what we’re using for this run
+        def _cfg_get(obj, key):
+            return obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
+
+        paths = self.cfg.paths
+        labels = self.cfg.labels
+
+        img_root = Path(_cfg_get(paths, "data_images_valid" if split == "valid" else "data_images_train"))
+        lbl_root = Path(_cfg_get(paths, "data_labels_valid" if split == "valid" else "data_labels_train"))
+        mask_sfx = _cfg_get(labels, "mask_filter")
+
+        if not img_root or not img_root.exists():
+            raise RuntimeError(f"[Stage C] ERROR: snapshot image root not found for split={split}: {img_root}")
+
+        # Enumerate TIFFs from the snapshot root
+        image_paths = sorted(list(img_root.glob("*.tif")) + list(img_root.glob("*.tiff")))
+
+        # NEW: confirm snapshot sources and what's enumerated
+        print(f"[EVAL] enumerating images from snapshot: {img_root}", flush=True)
+        print(f"[EVAL] labels_dir={lbl_root}  mask_suffix={mask_sfx}", flush=True)
+        if len(image_paths) > 0:
+            print("[EVAL] first 3 stems:", [p.stem for p in image_paths[:3]], flush=True)
+
+        # ---------------- log eval args ----------------
         print(
             "[Stage C] Eval args:",
             {
@@ -253,16 +259,20 @@ class EvaluatorCellpose3:
             cp_io.logger_setup()
 
         n_done = 0
-        per_image_stats = []
-        
+        per_image_stats: List[Dict[str, Any]] = []
+
         for ip in image_paths:
-            print(f"[EVAL] reading: {ip}", flush=True)  # add this
+            print(f"[EVAL] reading: {ip}", flush=True)
             img = self._read_image(ip)
-            # NEW: effective shape used by CP3 given channels
+
+            # Effective shape used by CP3 given channels
             H, W = img.shape[:2]
             used_shape = (H, W) if args.channels == [0, 0] else (H, W, img.shape[-1])
-            print(f"[EVAL][{ip.stem}] img.shape={tuple(img.shape)}  channels={args.channels}  used_shape={used_shape}",
-                flush=True)
+            print(
+                f"[EVAL][{ip.stem}] img.shape={tuple(img.shape)}  channels={args.channels}  used_shape={used_shape}",
+                flush=True
+            )
+
             masks, flows, cellprob = self._eval_single(model, img, args)
             paths_written = self._save_artifacts(ip, img, masks, flows, cellprob, args)
 
@@ -288,18 +298,18 @@ class EvaluatorCellpose3:
                 "prob_mean": prob_mean,
                 "prob_max": prob_max,
                 "pos_frac": pos_frac,
-                "shape": list(used_shape),
+                "shape": list(used_shape),   # record the effective shape actually used
             })
             n_done += 1
-            
-        # aggregate
+
+        # ---------------- aggregate ----------------
         agg = {
             "n_images": n_done,
             "mean_n_masks": float(np.mean([s["n_masks"] for s in per_image_stats])) if per_image_stats else 0.0,
             "split": split,
         }
 
-        # write CSV for quick filtering
+        # ---------------- write CSV for quick filtering ----------------
         csv_path = self.eval_dir / "eval_metrics.csv"
         with csv_path.open("w", newline="") as f:
             writer = csv.DictWriter(
@@ -310,11 +320,11 @@ class EvaluatorCellpose3:
             for s in per_image_stats:
                 writer.writerow({k: s.get(k) for k in writer.fieldnames})
 
-        # console summary of zero-mask images
+        # ---------------- console summary of zero-mask images ----------------
         n_zero = sum(1 for s in per_image_stats if s["n_masks"] == 0)
         print(f"[Stage C] zero-mask images: {n_zero}/{n_done}", flush=True)
 
-        # write JSON summary
+        # ---------------- write JSON summary ----------------
         (self.eval_dir / "eval_summary.json").write_text(json.dumps({
             "aggregate": agg,
             "per_image": per_image_stats
