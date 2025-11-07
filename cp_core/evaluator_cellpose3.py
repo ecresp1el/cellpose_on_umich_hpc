@@ -24,12 +24,7 @@ import csv
 
 import numpy as np
 
-try:
-    from cellpose import models, io as cp_io, plot as cp_plot
-except Exception as e:
-    models = None
-    cp_io = None
-    cp_plot = None
+from cellpose import models, io as cp_io, plot
 
 # Reuse standardized I/O + layout helpers (single source of truth)
 from cp_core.helper_functions.dl_helper import ensure_hwc_1to5, has_label, read_label
@@ -37,28 +32,18 @@ from cp_core.dataset import DatasetManager
 
 # ---------- small image I/O helpers ----------
 def _imsave_tif(path: Path, arr: np.ndarray) -> None:
-    """Write TIFF (float32/uint16). Uses cellpose.io if available, else imageio."""
+    """Write TIFF (float32/uint16) strictly using Cellpose I/O.
+
+    If cellpose.io.imsave is unavailable, print an error and abort.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    if cp_io is not None and hasattr(cp_io, "imsave"):
-        cp_io.imsave(str(path), arr)
-        return
-    try:
-        import imageio
-        imageio.imwrite(str(path), arr)
-    except Exception as e:
-        raise RuntimeError(f"Failed to save TIFF: {path}") from e
+    if cp_io is None or not hasattr(cp_io, "imsave"):
+        msg = f"[Stage C] ERROR: cellpose.io.imsave unavailable; cannot save {path}"
+        print(msg, flush=True)
+        raise RuntimeError(msg)
 
-def _to_uint16_labels(masks: np.ndarray) -> np.ndarray:
-    """Ensure label image is uint16 (Cellpose masks are integer-labeled)."""
-    if masks.dtype != np.uint16:
-        if masks.max() >= 65535:
-            raise ValueError("Label IDs exceed uint16 range.")
-        masks = masks.astype(np.uint16, copy=False)
-    return masks
-
-def _sigmoid(x: np.ndarray) -> np.ndarray:
-    """Numerically safe sigmoid for logits -> [0,1] view."""
-    return 1.0 / (1.0 + np.exp(-np.clip(x, -30, 30)))
+    cp_io.imsave(str(path), arr)
+    print(f"[Stage C] Saved via Cellpose API → {path}", flush=True)
 
 
 @dataclass
@@ -271,6 +256,7 @@ class EvaluatorCellpose3:
         per_image_stats = []
         
         for ip in image_paths:
+            print(f"[EVAL] reading: {ip}", flush=True)  # add this
             img = self._read_image(ip)
             # NEW: effective shape used by CP3 given channels
             H, W = img.shape[:2]
@@ -338,22 +324,16 @@ class EvaluatorCellpose3:
 
     # -------------------- helpers --------------------
     def _read_image(self, path: Path) -> np.ndarray:
-        """Read an image and return channel-last (H,W[,C]) standardized for CP3.
+        """Read image using the official Cellpose I/O API.
 
-        Standardization:
-        - Enforces channel-last layout (CHW→HWC if needed)
-        - Drops trivial alpha planes
-        - Caps to ≤ 5 channels
+        Behavior:
+        - Delegates to cellpose.io.imread() (handles TIFF/PNG/JPG stacks)
+        - Returns array ready for model.eval()
+        - Still normalized to HWC layout via ensure_hwc_1to5()
         """
-        if cp_io is not None and hasattr(cp_io, "imread"):
-            arr = cp_io.imread(str(path))
-        else:
-            import imageio
-            arr = imageio.imread(str(path))
-
-        # Single, authoritative standardization (replaces ad-hoc squeezes/moveaxis)
-        arr = ensure_hwc_1to5(arr, debug=False)
-        return arr
+        img = cp_io.imread(str(path))              # ← Cellpose official API
+        img = ensure_hwc_1to5(img, debug=False)    # keep consistent layout, drop trivial alpha, ≤5 channels
+        return img
 
     def _eval_single(self, model, img: "np.ndarray", args) -> Tuple["np.ndarray", Any, "np.ndarray"]:
         """Run Cellpose v3 eval and return (masks, flows, cellprob).
@@ -367,11 +347,11 @@ class EvaluatorCellpose3:
             [img],                               # <-- IMPORTANT: pass a list
             channels=args.channels,
             normalize=args.normalize,
-            rescale=None,                        # keep native grid
+            rescale=False,                        # keep native grid
             niter=args.niter,
             bsize=args.bsize,
-            flow_threshold=getattr(args, "flow_threshold", None),
-            cellprob_threshold=getattr(args, "cellprob_threshold", None),
+            flow_threshold=args.flow_threshold,
+            cellprob_threshold=args.cellprob_threshold
         )
 
         if not isinstance(out, tuple):
@@ -411,246 +391,94 @@ class EvaluatorCellpose3:
         image: np.ndarray,
         masks: np.ndarray,
         flows: Any,
-        cellprob: np.ndarray,
+        cellprob: np.ndarray,           # kept for compatibility
         args: EvalArgs,
     ) -> Dict[str, str]:
         """
-        Write all Stage-C artifacts for a single image and return the paths written.
-
-        What this does (in order)
-        -------------------------
-        1) Save masks as uint16 TIFF (integer labels).
-        2) Save flows:
-        - raw dP (dy, dx) as .npy when available,
-        - flow magnitude preview as .tif for quick QC.
-        *Flows in Cellpose v3 can be a dict (preferred) or an ndarray stack;
-            we normalize both formats safely.*
-        3) Save raw logits (`_prob.tif`) and a viewable sigmoid version (`_prob_view.tif`).
-        4) Save ImageJ ROI archive (`_rois.zip`) derived from integer labels.
-        5) Save a 1×4 QC panel: input | prob (logit) | flow magnitude | overlay
-        (uses CP plotting if available; falls back to simple contour overlay).
-        *Panel title includes the mask count for quick triage.*
-        6) Save a per-image JSON summary with pointers to every artifact.
-
-        Returns
-        -------
-        Dict[str, str]
-            Mapping of artifact names → absolute paths on disk.
+        Save Cellpose-native outputs for a single image using the Cellpose API only.
+        - mask TIFF and *_seg.npy via cellpose.io.save_masks()
+        - QA segmentation panel via cellpose.plot.show_segmentation()
+        - optional ROIs via cellpose.io.save_rois()
         """
+        if cp_io is None or not hasattr(cp_io, "save_masks"):
+            msg = "[Stage C] ERROR: cellpose.io.save_masks unavailable; cannot write artifacts."
+            print(msg, flush=True)
+            raise RuntimeError(msg)
+
         written: Dict[str, str] = {}
         stem = ip.stem
 
-        # -------------------- 1) MASKS (uint16) --------------------
-        m_u16 = _to_uint16_labels(masks)               # enforce integer dtype for TIFF/ROIs
-        f_mask = self.d_masks / f"{stem}_masks.tif"
-        _imsave_tif(f_mask, m_u16)
-        written["masks"] = str(f_mask)
-        n_masks = int(m_u16.max())
+        # ---------- 1) Canonical *_seg.npy + mask TIFF ----------
+        try:
+            cp_io.save_masks(
+                images=[image],
+                masks=[masks],
+                flows=[flows],
+                file_names=[stem],
+                savedir=str(self.eval_dir),
+                png=False,
+                tif=True,                # write _masks.tif
+                save_flows=True,
+                save_outlines=True,
+            )
+            f_mask = self.eval_dir / f"{stem}_masks.tif"
+            f_seg  = self.eval_dir / f"{stem}_seg.npy"
+           
+            if f_mask.exists(): written["masks"]   = str(f_mask)
+            if f_seg.exists():  written["seg_npy"] = str(f_seg)
+           
+            print(f"[Stage C][{stem}] saved via Cellpose API → {f_mask.name}, {f_seg.name}", flush=True)
         
-        print(f"[Stage C][{stem}] saved masks: {f_mask}", flush=True)# #instances for logs/titles
+        except Exception as e:
+            msg = f"[Stage C] ERROR: save_masks() failed for {stem}: {e}"
+            print(msg, flush=True)
+            raise
 
-        # -------------------- 2) FLOWS (raw dP + magnitude viz) --------------------
-        if args.save_flows:
-            # Normalize flows structure first: dict (preferred) or ndarray stack.
-            # CP may also return lists; unwrap single-item lists.
-            if isinstance(flows, (list, tuple)):
-                flows = flows[0]
-
-            dP = None  # (2, H, W) = (dy, dx)
-            if isinstance(flows, dict):
-                dP = flows.get("dP", None)
-            else:
-                # Some variants return a stack with channels [dy, dx, prob, ...]
-                if hasattr(flows, "ndim") and flows.ndim >= 3 and flows.shape[0] >= 2:
-                    dP = flows[:2]
-
-            if isinstance(dP, np.ndarray) and dP.ndim == 3 and dP.shape[0] == 2:
-                f_flow_npy = self.d_flows / f"{stem}_flows.npy"
-                f_flow_tif = self.d_flows / f"{stem}_flows.tif"
-                np.save(str(f_flow_npy), dP)
-                # magnitude preview = sqrt(dy^2 + dx^2) for quick visual QC in Fiji
-                mag = np.sqrt(dP[0] ** 2 + dP[1] ** 2).astype(np.float32)
-                _imsave_tif(f_flow_tif, mag)
-                written["flows_npy"] = str(f_flow_npy)
-                written["flows_tif"] = str(f_flow_tif)
-                
-                print(f"[Stage C][{stem}] saved flows: {f_flow_npy}, {f_flow_tif}", flush=True)
-
-        # -------------------- 3) PROBABILITIES (logits + view) --------------------
-        if args.save_prob:
-            f_prob = self.d_prob / f"{stem}_prob.tif"
-            _imsave_tif(f_prob, cellprob.astype(np.float32))     # raw logits, do NOT sigmoid
-            written["prob_tif"] = str(f_prob)
-            print(f"[Stage C][{stem}] saved prob: {f_prob}", flush=True)
-
-        if args.save_prob_view:
-            f_probv = self.d_prob / f"{stem}_prob_view.tif"
-            prob_view = _sigmoid(cellprob.astype(np.float32))    # human-friendly view
-            _imsave_tif(f_probv, prob_view)
-            written["prob_view_tif"] = str(f_probv)
-            print(f"[Stage C][{stem}] saved prob_view: {f_probv}", flush=True)
-
-        # -------------------- 4) ROIs (ImageJ archive) --------------------
-        if args.save_rois and cp_io is not None and hasattr(cp_io, "save_rois"):
-            # CP will append .zip; base must NOT include an extension.
-            base = (self.d_rois / stem).with_suffix("")
-            cp_io.save_rois(m_u16, str(base))
-            written["rois_zip"] = str(base) + ".zip"
-            print(f"[Stage C][{stem}] saved rois: {written['rois_zip']}", flush=True)
-        
-        # -------- 1×4 Panel (input | prob | flow viz | overlay) --------
-        if args.save_panels:
+        # ---------- 2) 1×4 Segmentation Panel via Cellpose API ----------
+        try:
+            # Define panel output path
             f_panel = self.d_panels / f"{stem}_panel_1x4.png"
-            
-            try:
-                import matplotlib
-                matplotlib.use("Agg")  # headless on HPC
-                import matplotlib.pyplot as plt
 
-                # --- diagnostics: print what we are going to plot ---
-                print(f"[Panel][{stem}] image.shape={getattr(image, 'shape', None)} "
-                    f"cellprob.shape={getattr(cellprob, 'shape', None)} "
-                    f"masks.shape={getattr(masks, 'shape', None)}", flush=True)
-                print(f"[Panel][{stem}] image.dtype={getattr(image, 'dtype', None)} "
-                    f"cellprob.dtype={getattr(cellprob, 'dtype', None)} "
-                    f"masks.max={int(m_u16.max())}", flush=True)
-                try:
-                    print(f"[Panel][{stem}] cellprob min/max = "
-                        f"{float(np.min(cellprob)):.3f} / {float(np.max(cellprob)):.3f}", flush=True)
-                except Exception:
-                    pass
+            # Use official Cellpose plotting API (no custom matplotlib logic)
+            fig = plot.show_segmentation(
+                image=image,
+                masks=masks,
+                flows=flows if isinstance(flows, dict) else None,
+                channels=self.cfg.eval.get("channels", [0, 0]),
+                title=f"{stem} (n={int(masks.max())})",
+            )
 
-                # flow magnitude (dict vs ndarray vs none), with logging
-                mag = None
-                flows_kind = "none"
-                _flows = flows[0] if isinstance(flows, (list, tuple)) else flows
-                if isinstance(_flows, dict) and isinstance(_flows.get("dP", None), np.ndarray):
-                    dP = _flows["dP"]
-                    flows_kind = "dict"
-                    if dP.ndim == 3 and dP.shape[0] >= 2:
-                        mag = np.sqrt(dP[0] ** 2 + dP[1] ** 2)
-                elif hasattr(_flows, "ndim") and _flows.ndim >= 3 and _flows.shape[0] >= 2:
-                    dP = _flows[:2]
-                    flows_kind = "ndarray"
-                    mag = np.sqrt(dP[0] ** 2 + dP[1] ** 2)
-
-                print(f"[Panel][{stem}] flows_kind={flows_kind} "
-                    f"mag.shape={getattr(mag, 'shape', None)}", flush=True)
-
-                # We do NOT resize/pad; we only plot if shapes match the input’s HxW
-                H = image.shape[0] if image.ndim >= 2 else None
-                W = image.shape[1] if image.ndim >= 2 else None
-                ok_prob = (hasattr(cellprob, "shape") and cellprob.shape[:2] == (H, W))
-                ok_mag  = (hasattr(mag, "shape")      and mag.shape[:2]       == (H, W))
-
-                fig, axs = plt.subplots(1, 4, figsize=(16, 4))
-
-                # (1) input (contrast-limited)
-                axs[0].imshow(self._auto_contrast(image), cmap="gray")
-                axs[0].set_title("input"); axs[0].axis("off")
-
-                # (2) prob (logit) or “no-prob”
-                if ok_prob:
-                    axs[1].imshow(cellprob, cmap="gray")
-                    axs[1].set_title("prob (logit)")
-                else:
-                    axs[1].imshow(np.zeros((H, W), dtype=np.float32), cmap="gray")
-                    axs[1].set_title("prob (missing)")
-                    print(f"[Panel][{stem}] WARN: prob.shape {getattr(cellprob,'shape',None)} "
-                        f"!= image HxW {(H, W)}; showing blank", flush=True)
-                axs[1].axis("off")
-
-                # (3) flow magnitude or “no-flow”
-                if ok_mag:
-                    axs[2].imshow(mag, cmap="gray")
-                    axs[2].set_title("flow mag")
-                else:
-                    axs[2].imshow(np.zeros((H, W), dtype=np.float32), cmap="gray")
-                    axs[2].set_title("flow (missing)")
-                    if mag is None:
-                        print(f"[Panel][{stem}] INFO: no flow magnitude available", flush=True)
-                    else:
-                        print(f"[Panel][{stem}] WARN: mag.shape {getattr(mag,'shape',None)} "
-                            f"!= image HxW {(H, W)}; showing blank", flush=True)
-                axs[2].axis("off")
-
-                # (4) overlay — try cp_plot; else draw boundary; else just input
-                overlay_title = f"overlay (n={int(m_u16.max())})"
-                overlay_done = False
-                try:
-                    if cp_plot is not None and hasattr(cp_plot, "show_segmentation") and image.ndim >= 2:
-                        flows_for_plot = _flows if isinstance(_flows, dict) else None
-                        # IMPORTANT: cp_plot expects (H,W) or (H,W,C); we already ensured image is that in _read_image
-                        cp_plot.show_segmentation(image, masks, flows_for_plot,
-                                                channels=self.cfg.eval.get("channels", [0, 0]),
-                                                ax=axs[3])
-                        overlay_done = True
-                        print(f"[Panel][{stem}] overlay via cp_plot.show_segmentation()", flush=True)
-                except Exception as e:
-                    print(f"[Panel][{stem}] overlay cp_plot failed: {e}", flush=True)
-
-                if not overlay_done:
-                    bnd = self._boundary_from_labels(m_u16)
-                    axs[3].imshow(self._auto_contrast(image), cmap="gray")
-                    if bnd.any():
-                        axs[3].contour(bnd, colors="r", linewidths=0.5)
-                        print(f"[Panel][{stem}] overlay via boundary contour", flush=True)
-                    else:
-                        print(f"[Panel][{stem}] overlay fallback: no boundaries, showing input only", flush=True)
-                    axs[3].set_title(overlay_title)
-                axs[3].axis("off")
-
-                fig.tight_layout()
-                fig.savefig(str(f_panel), dpi=200)
-                plt.close(fig)
-                written["panel_png"] = str(f_panel)
+            # If Cellpose returned a matplotlib Figure, save it directly
+            if hasattr(fig, "savefig"):
+                fig.savefig(str(f_panel), dpi=200, bbox_inches="tight")
                 print(f"[Panel][{stem}] saved panel: {f_panel}", flush=True)
+                written["panel_png"] = str(f_panel)
+            else:
+                print(f"[Panel][{stem}] WARN: plot.show_segmentation() did not return a Figure object", flush=True)
 
-            except Exception as e:
-                # Last-resort minimal panel (just input), still write something
-                try:
-                    import imageio
-                    im0 = self._auto_contrast(image)
-                    if im0.ndim == 2:
-                        im0 = (np.stack([im0]*3, axis=-1) * 255).astype(np.uint8)
-                    imageio.imwrite(str(f_panel), im0)
-                    written["panel_png"] = str(f_panel)
-                    print(f"[Panel][{stem}] saved minimal panel (input only): {f_panel}", flush=True)
-                except Exception as ee:
-                    print(f"[Panel][{stem}] panel save failed completely: {ee}", flush=True)
+        except Exception as e:
+            # If plotting fails, log the warning but do not interrupt the run
+            print(f"[Panel][{stem}] WARN: plot.show_segmentation failed: {e}", flush=True)
 
-        # -------------------- 6) JSON SUMMARY --------------------
+        # ---------- 3) Optional ROIs ----------
+        if args.save_rois:
+            if hasattr(cp_io, "save_rois"):
+                base = (self.d_rois / stem).with_suffix("")  # cp_io appends .zip
+                cp_io.save_rois(masks.astype(np.uint16, copy=False), str(base))
+                written["rois_zip"] = str(base) + ".zip"
+                print(f"[Stage C][{stem}] saved rois: {written['rois_zip']}", flush=True)
+            else:
+                print(f"[Stage C][{stem}] ERROR: cellpose.io.save_rois unavailable; skipping ROIs.", flush=True)
+
+        # ---------- 4) Minimal JSON summary (optional) ----------
         f_json = self.d_json / f"{stem}_summary.json"
         f_json.write_text(json.dumps({
             "image": str(ip),
-            "n_masks": n_masks,
             "masks_tif": written.get("masks"),
-            "prob_tif": written.get("prob_tif"),
-            "prob_view_tif": written.get("prob_view_tif"),
-            "flows_npy": written.get("flows_npy"),
-            "flows_tif": written.get("flows_tif"),
-            "rois_zip": written.get("rois_zip"),
+            "seg_npy": written.get("seg_npy"),
             "panel_png": written.get("panel_png"),
+            "rois_zip": written.get("rois_zip"),
         }, indent=2))
         written["summary_json"] = str(f_json)
 
         return written
-    # ---------- small image utilities ----------
-    @staticmethod
-    def _auto_contrast(img: np.ndarray, p_low=2.0, p_high=98.0) -> np.ndarray:
-        """Percentile-based contrast stretch for panels."""
-        lo, hi = np.percentile(img.astype(np.float32), [p_low, p_high])
-        if hi <= lo:
-            return img
-        x = np.clip((img - lo) / (hi - lo), 0, 1)
-        return x
-
-    @staticmethod
-    def _boundary_from_labels(lbl: np.ndarray) -> np.ndarray:
-        """Return boolean boundary mask from label image."""
-        from scipy.ndimage import binary_dilation
-        edges = np.zeros_like(lbl, dtype=bool)
-        # mark boundaries by comparing with 4-neighborhood shifts
-        edges[:-1, :] |= (lbl[:-1, :] != lbl[1:, :])
-        edges[:, :-1] |= (lbl[:, :-1] != lbl[:, 1:])
-        return binary_dilation(edges, iterations=1)
