@@ -420,17 +420,7 @@ class EvaluatorCellpose3:
 
         # ---------- 1) Canonical *_seg.npy + mask TIFF ----------
         try:
-            cp_io.save_masks(
-                images=[image],
-                masks=[masks],
-                flows=[flows],
-                file_names=[stem],
-                savedir=str(self.eval_dir),
-                png=False,
-                tif=True,                # write _masks.tif
-                save_flows=True,
-                save_outlines=True,
-            )
+            cp_io.imsave(str(self.eval_dir / f"{stem}_masks.tif"), masks.astype(np.uint16, copy=False))
             f_mask = self.eval_dir / f"{stem}_masks.tif"
             f_seg  = self.eval_dir / f"{stem}_seg.npy"
            
