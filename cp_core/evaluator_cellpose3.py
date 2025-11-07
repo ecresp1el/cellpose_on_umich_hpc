@@ -357,7 +357,7 @@ class EvaluatorCellpose3:
             [img],                               # <-- IMPORTANT: pass a list
             channels=args.channels,
             normalize=args.normalize,
-            rescale=False,                        # keep native grid
+            resample=False,                        # keep native grid
             niter=args.niter,
             bsize=args.bsize,
             flow_threshold=args.flow_threshold,
