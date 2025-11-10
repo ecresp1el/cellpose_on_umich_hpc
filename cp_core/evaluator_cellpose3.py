@@ -24,7 +24,9 @@ import csv
 from matplotlib import pyplot as plt
 import numpy as np
 
-from cellpose import models, io as cp_io, plot
+import cellpose
+from cellpose import io as cp_io, plot
+from cellpose.models import CellposeModel
 
 # Reuse standardized I/O + layout helpers (single source of truth)
 from cp_core.helper_functions.dl_helper import ensure_hwc_1to5, has_label, read_label
@@ -95,7 +97,7 @@ class EvaluatorCellpose3:
 
         # Detect Cellpose version once
         try:
-            cpv = getattr(models, "__version__", "unknown")
+            cpv = getattr(cellpose, "__version__", "unknown")
         except AttributeError:
             from cellpose import __version__ as cpv
 
@@ -176,7 +178,7 @@ class EvaluatorCellpose3:
 
         # Otherwise fall back to pretrained CPSAM
         print("[Stage C] model_source = stock CPSAM (no fine-tuned weights found)")
-        return models.CellposeModel(gpu=use_gpu, pretrained_model="cpsam")
+        return CellposeModel(gpu=use_gpu, pretrained_model="cpsam")
         
     # -------------------- evaluation --------------------
     def evaluate_images(self, split: str, args):
