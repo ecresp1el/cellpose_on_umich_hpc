@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional
 import json
 import csv
+import time
 
 from matplotlib import pyplot as plt
 import numpy as np
@@ -221,15 +222,23 @@ class EvaluatorCellpose3:
         for _bad in ("save_panels", "save_rois", "save_flows", "save_prob", "save_prob_view"):
             kw.pop(_bad, None)
         _print_eval_kwargs(kw)
+        
+        # 5) run eval (per-image for visible progress)
+        N = len(imgs)
+        print(f"[Stage C] Running eval per-image for visibility… total={N}")
 
-        # 5) run eval (batch)
-        print(f"[Stage C] Running batch eval on {len(imgs)} image(s)…")
-        try:
-            masks, flows, styles = self.model.eval(imgs, **kw)
-        except Exception as ex:
-            print(f"[Stage C][ERROR] model.eval failed: {ex}")
-            # early exit with zero written
-            return {"n_images": 0}
+        masks, flows, styles = [], [], []
+        for i, (im, p) in enumerate(zip(imgs, kept_files), 1):
+            t0 = time.time()
+            m, f, s = self.model.eval([im], **kw)   # CP-SAM expects list; returns lists
+            m0 = m[0]
+            masks.append(m0)
+            flows.append(f)
+            styles.append(s)
+
+            nmask = int(getattr(m0, "max", lambda: 0)())
+            dt = time.time() - t0
+            print(f"[Stage C] eval {i}/{N}: {p.name}  shape={getattr(im,'shape','?')}  n_masks={nmask}  time={dt:.1f}s", flush=True)
 
         # 6) validate outputs
         if not _validate_batch_outputs(masks, flows, styles, n_expected=len(imgs)):
