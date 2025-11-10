@@ -187,20 +187,24 @@ class EvaluatorCellpose3:
         - runs batch eval with kwargs from args
         - saves masks (+ optional panel)
         """
-        # 0) resolve images via Stage A DatasetManager (no ad-hoc path guessing)
-        dm = DatasetManager(self.cfg)
-        files = dm.list_images(split=split)   # supports 'valid' and 'all' exactly like Stage A
+        # 0) resolve images via Stage A's DatasetManager (no ad-hoc paths)
 
-        # eval output directory
+        dm = DatasetManager(
+            getattr(self.cfg, "paths", {}) or {},
+            getattr(self.cfg, "labels", {}) or {},
+            self.run_dir / "cfg",
+        )
+
+        files = dm.list_images(split=split)  # 'valid' or 'all' (Stage A union logic)
+
         out_dir = self.run_dir / "eval" / split
         out_dir.mkdir(parents=True, exist_ok=True)
 
         print(f"[Stage C] Split='{split}'  n_files={len(files)}  out_dir={out_dir}")
-
         if not files:
             print("[Stage C][ERROR] No images found by DatasetManager.list_images(); check dataset layout or split.")
             return {"n_images": 0}
-
+        
         # 2) load images (no channel slicing here)
         print("[Stage C] Loading images (no channel manipulation in this step)…")
         imgs, kept_files = _load_all_images(files)
