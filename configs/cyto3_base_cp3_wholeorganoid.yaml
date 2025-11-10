@@ -26,7 +26,7 @@ train:
 eval:
   #based on cellpose4 (cellposesam API)
   use_pretrained: true
-  model_type: cyto3
+  model_type: cpsam
   baseline_pretrained: true     # 👈 ensures we use vanilla cyto3
 
   # Thresholds

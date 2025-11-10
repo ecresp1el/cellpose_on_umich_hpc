@@ -71,26 +71,6 @@ SNAP="${RUN_DIR}/cfg/config_snapshot.yml"
 if [[ ! -f "$SNAP" ]]; then
   echo "[ERROR] No snapshot at ${RUN_DIR}/cfg/config_snapshot.yaml"; exit 2; fi
 
-# --- Print what we are going to evaluate (paths/knobs read from snapshot) ---
-python - <<PY
-import yaml, pathlib
-snap = pathlib.Path("$SNAP")
-cfg  = yaml.safe_load(snap.read_text())
-paths = cfg.get("paths",{}) or {}
-evalk = cfg.get("eval",{}) or {}
-train = cfg.get("train",{}) or {}
-print("[SNAP] evaluating with snapshot:", snap)
-print("[SNAP] paths.data_images_train :", paths.get("data_images_train"))
-print("[SNAP] paths.data_labels_train :", paths.get("data_labels_train"))
-print("[SNAP] eval.resample           :", evalk.get("resample"))
-print("[SNAP] eval.niter              :", evalk.get("niter"))
-print("[SNAP] eval.bsize              :", evalk.get("bsize"))
-print("[SNAP] eval.cellprob_threshold :", evalk.get("cellprob_threshold"))
-print("[SNAP] eval.flow_threshold     :", evalk.get("flow_threshold"))
-print("[SNAP] train.channels          :", train.get("channels"))
-print("[SNAP] eval.channels           :", evalk.get("channels"))
-PY
-
 # --- Run Stage C on CPU using the run snapshot (no YAML edits) ---
 echo
 echo ">>> Running Stage C evaluate (CPU) on snapshot (split=${SPLIT})…"

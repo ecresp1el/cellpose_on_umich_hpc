@@ -35,7 +35,7 @@
 #SBATCH --job-name=cp3_prepare_wholeorganoid
 #SBATCH --account=parent0
 #SBATCH --partition=standard      # <— use the standard (CPU) partition
-# #SBATCH --partition=gpu               # switch to 'standard' if GPUs are busy
+# #SBATCH --partition=gpu               # switch to 'standard' if GPUs are busysque
 # #SBATCH --gres=gpu:1                  # comment out if using CPU partition
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
