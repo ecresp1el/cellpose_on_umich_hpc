@@ -201,16 +201,27 @@ class WholeOrganoidExperiment:
     def run_evaluation(self, split: str = "valid") -> None:
         """Stage C: run inference and write artifacts per image.
 
-        Writes
-        ------
-        results/<model>/run_<ts>/eval/...
-        (masks, flows, prob, rois, panels, per-image JSON, eval_summary.json)
+        This method performs model evaluation on the specified dataset split
+        (typically 'valid' or 'test'). It loads the evaluator, resolves all
+        evaluation arguments from YAML (via build_eval_args), and executes
+        segmentation inference for each image in the split.
         """
+        # Import the Cellpose evaluator class
+        # Handles loading the trained model and running inference
         from .evaluator_cellpose3 import EvaluatorCellpose3
+
+        # Initialize evaluator with the experiment config and output directory
         evaluator = EvaluatorCellpose3(self.cfg, self.run_dir)
+
+        # Build evaluation arguments from YAML
+        # Returns EvalArgs containing only valid, non-null parameters
         args = evaluator.build_eval_args()
+
+        # Perform evaluation on all images within the specified split
+        # This calls model.eval(img, **args.kwargs) internally
         agg = evaluator.evaluate_images(split=split, args=args)
-        # Minimal console feedback
+
+        # Minimal console feedback: how many images were processed and where outputs were written
         print(f"[Stage C] Wrote eval artifacts. Split={split}, images={agg['n_images']}")
         
     def get_run_dir(self) -> Path:
