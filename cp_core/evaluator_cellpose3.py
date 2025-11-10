@@ -15,11 +15,10 @@ Notes
 """
 
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Tuple
 import json
-import math
 import csv
 
 from matplotlib import pyplot as plt
@@ -49,20 +48,27 @@ def _imsave_tif(path: Path, arr: np.ndarray) -> None:
 
 @dataclass
 class EvalArgs:
-    """Resolved evaluation args passed to Cellpose v3 model.eval()."""
-    channels: List[int]           # e.g., [0,0]
-    normalize: bool               # false by contract unless overridden
-    niter: int                    # 2000 by contract
-    resample: bool                # false by contract
-    bsize: int                    # 512 by contract
-    flow_threshold: float         # 0.4 by default
-    cellprob_threshold: float     # 0.0 by default
+    """
+    Generic container for dynamic Cellpose eval kwargs (CP4/CP-SAM friendly).
 
-    save_panels: bool
-    save_rois: bool
-    save_flows: bool
-    save_prob: bool
-    save_prob_view: bool
+    - Holds ONLY the non-null, non-deprecated keys that will be forwarded to model.eval().
+    - No defaults are injected here; YAML controls everything.
+    - Designed for clean logging / provenance snapshots.
+    """
+    kwargs: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a plain dict suitable for **kwargs into model.eval()."""
+        return dict(self.kwargs)
+
+    def save_json(self, path: Path) -> None:
+        """
+        Write the effective eval kwargs (what we will actually pass to model.eval)
+        as a JSON file for reproducibility.
+        """
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w") as f:
+            json.dump(self.kwargs, f, indent=2, sort_keys=True)
 
 
 class EvaluatorCellpose3:
@@ -96,23 +102,52 @@ class EvaluatorCellpose3:
 
     # -------------------- arg building --------------------
     def build_eval_args(self) -> EvalArgs:
-        """Resolve eval args from YAML with Stage C defaults/invariants."""
-        e = self.cfg.eval
-        chans = e.get("channels", self.cfg.train.get("channels", [0, 0]))
-        return EvalArgs(
-            channels=list(chans),
-            normalize=bool(e.get("normalize", False)),
-            niter=int(e.get("niter", 2000)),
-            resample=bool(e.get("resample", False)),   # [CONTRACT] keep native grid
-            bsize=int(e.get("bsize", 512)),
-            flow_threshold=float(e.get("flow_threshold", 0.4)),
-            cellprob_threshold=float(e.get("cellprob_threshold", 0.0)),
-            save_panels=bool(e.get("save_panels", True)),
-            save_rois=bool(e.get("save_rois", True)),
-            save_flows=bool(e.get("save_flows", True)),
-            save_prob=bool(e.get("save_prob", True)),
-            save_prob_view=bool(e.get("save_prob_view", True)),
-        )
+        """Resolve eval args from YAML with Stage C defaults/invariants.
+        - YAML keys set to null are skipped (use Cellpose defaults)
+        - Deprecated keys (channels, rescale) are always ignored
+        - No internal defaults are injected; all thresholds passed through directly
+        """
+        e = self.cfg.eval or {}
+
+        # Detect Cellpose version once
+        try:
+            cpv = getattr(models, "__version__", "unknown")
+        except AttributeError:
+            from cellpose import __version__ as cpv
+
+        # Keys known to be deprecated or ignored in Cellpose 4+ (e.g., SAM backend)
+        # These arguments should never be passed to model.eval(), as doing so
+        # triggers deprecation warnings or silently has no effect.
+        deprecated = {"channels", "rescale"}
+
+        # Initialize dictionary of parameters that will actually be passed to model.eval()
+        eval_kwargs = {}
+
+        # Iterate over every key/value pair in the YAML `eval:` block
+        for k, v in e.items():
+
+            # Skip parameters explicitly set to null in YAML.
+            # A null means "use the model's built-in default" (do not override).
+            if v is None:
+                continue
+
+            # Skip any argument that is known to be deprecated.
+            # This prevents deprecation warnings like:
+            # "channels deprecated in v4.0.1+. If data contain more than 3 channels, only the first 3 will be used"
+            if k in deprecated:
+                print(f"[Stage C] Ignoring deprecated key: {k}")
+                continue
+
+            # Otherwise, keep the key-value pair to forward directly to model.eval().
+            eval_kwargs[k] = v
+
+        # Diagnostic printout for reproducibility and transparency
+        # Shows the detected Cellpose version and which parameters will be passed through.
+        print(f"[Stage C] Detected Cellpose v{cpv}")
+        print(f"[Stage C] Eval args used: {list(eval_kwargs.keys())}")
+
+        # Return EvalArgs dataclass (same as before)
+        return EvalArgs(**eval_kwargs)
 
     # -------------------- model loading --------------------
     def load_model(self):

@@ -24,13 +24,43 @@ train:
   channels: [0, 0]
 
 eval:
+  #based on cellpose4 (cellposesam API)
   use_pretrained: true
   model_type: cyto3
   baseline_pretrained: true     # 👈 ensures we use vanilla cyto3
-  rescale: false
-  bsize: 512
-  diameter: 1350
-  channels: [0, 0]
+
+  # Thresholds
+  flow_threshold: 0.4
+  cellprob_threshold: 0.0
+
+  # Normalization (customized)
+  normalize:
+    tile_norm_blocksize: 25
+
+  #other cellpose4 parameters
+  batch_size: null 
+  resample: null 
+  channel_axis: null
+  z_axis: null
+  invert: null
+  rescale: null
+  diameter: null 
+  do_3D: null
+  anisotropy: null
+  stitch_threshold: null
+  max_size_fraction: null
+  niter: null
+  augment: null
+  tile_overlap: null
+  bsize: null
+  interp: null
+  compute_masks: null
+  progress: null
+
+
+
+
+
 
 
 system: 
