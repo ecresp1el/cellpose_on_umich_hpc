@@ -188,7 +188,6 @@ class EvaluatorCellpose3:
         - saves masks (+ optional panel)
         """
         # 0) resolve images via Stage A DatasetManager (no ad-hoc path guessing)
-        from .dataset_manager import DatasetManager
         dm = DatasetManager(self.cfg)
         files = dm.list_images(split=split)   # supports 'valid' and 'all' exactly like Stage A
 
