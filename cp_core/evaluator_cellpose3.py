@@ -30,22 +30,6 @@ from cellpose import models, io as cp_io, plot
 from cp_core.helper_functions.dl_helper import ensure_hwc_1to5, has_label, read_label
 from cp_core.dataset import DatasetManager
 
-# ---------- small image I/O helpers ----------
-def _imsave_tif(path: Path, arr: np.ndarray) -> None:
-    """Write TIFF (float32/uint16) strictly using Cellpose I/O.
-
-    If cellpose.io.imsave is unavailable, print an error and abort.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if cp_io is None or not hasattr(cp_io, "imsave"):
-        msg = f"[Stage C] ERROR: cellpose.io.imsave unavailable; cannot save {path}"
-        print(msg, flush=True)
-        raise RuntimeError(msg)
-
-    cp_io.imsave(str(path), arr)
-    print(f"[Stage C] Saved via Cellpose API → {path}", flush=True)
-
-
 @dataclass
 class EvalArgs:
     """
@@ -149,97 +133,47 @@ class EvaluatorCellpose3:
         # Return EvalArgs dataclass (same as before)
         return EvalArgs(**eval_kwargs)
 
+
     # -------------------- model loading --------------------
     def load_model(self):
-        """Load a Cellpose model for evaluation.
+        """Load CPSAM model for evaluation.
 
-        Specialist-first:
-        - Prefer the CP-managed model directory created during training
-        - Fallback to our saved state_dict if present
+        - If a fine-tuned model exists in this run_dir (Stage B output),
+          load that checkpoint.
+        - Otherwise, use the stock pretrained CPSAM model.
 
-        Baseline:
-        - If eval.baseline_pretrained: true OR no trained weights/dir found,
-            build a vanilla model from eval.model_type (default 'cyto3')
-            or eval.pretrained_model if provided.
+        Only one fine-tuning round is ever supported.
         """
         assert models is not None, "cellpose.models not available."
-        # Auto-detect GPU
+
+        # Detect GPU
         try:
             import torch
             use_gpu = torch.cuda.is_available()
         except Exception:
             use_gpu = False
 
-        # -------------------- BASELINE HANDLING (added) --------------------
-        # The goal of this block is to decide whether we should run evaluation
-        # using a *baseline pretrained* Cellpose model (e.g. vanilla cyto3)
-        # instead of a specialist fine-tuned model from this run_dir.
-        #
-        # This allows the same Stage C evaluation pipeline to handle both:
-        #   (1) "baseline" evaluations — using public/pretrained Cellpose weights
-        #   (2) "specialist" evaluations — using custom fine-tuned weights saved in run_dir/train/
-        #
-        # Decision rule:
-        #   → If eval.baseline_pretrained is True in the snapshot, OR
-        #     if no trained weights are found in cp_model_dir or fallback_weights,
-        #     we assume this is a baseline run and use vanilla cyto3 (or user-provided pretrained_model).
-        #
-        # Otherwise (trained weights exist and baseline flag not set),
-        #   → the logic falls through to the normal "specialist" loading section below.
-        
-        # Extract the eval block from the current run's config/snapshot (self.cfg).
-        eval_cfg = getattr(self.cfg, "eval", {}) or {}
-       
-        # Boolean toggle for explicit baseline mode from YAML:
-        # e.g. eval.baseline_pretrained: true
-        baseline_flag = bool(getattr(eval_cfg, "baseline_pretrained", False))
-        
-        # Check for trained model artifacts in the current run directory:
-        # - self.cp_model_dir  → main Cellpose-managed model folder (Stage B output)
-        # - self.fallback_weights → optional .pt state_dict if cp_model_dir not present
+        # Check for fine-tuned model directory or checkpoint
         have_cp_dir = self.cp_model_dir.exists()
         have_fallback = self.fallback_weights.exists()
 
-        
-        # If baseline is explicitly requested, OR if there are no trained weights available,
-        # then create a *baseline* Cellpose model source.
-        if baseline_flag or (not have_cp_dir and not have_fallback):
-
-            # Optional override: user may specify a custom pretrained checkpoint path in YAML
-            # via eval.pretrained_model: /path/to/custom_weights.pt
-            pretrained_override = getattr(eval_cfg, "pretrained_model", None)
-            
-            if pretrained_override:
-                # Build the model using a specific pretrained weight file path
-                print(f"[Stage C] model_source = baseline: pretrained_model={pretrained_override}")
-                return models.CellposeModel(gpu=use_gpu, pretrained_model=str(pretrained_override))
-            else:
-                # Default to Cellpose's built-in 'cyto3' model type (public pretrained weights)
-                mtype = getattr(eval_cfg, "model_type", "cyto3")
-                print(f"[Stage C] model_source = baseline: {mtype}")
-                return models.CellposeModel(gpu=use_gpu, model_type=mtype)
-        # -------------------------------------------------------------------
-        
-        # Primary: CP's own model dir (best compatibility)
-        if self.cp_model_dir.exists():
-            print(f"[Stage C] model_source = specialist: {self.cp_model_dir}")
+        if have_cp_dir:
+            print(f"[Stage C] model_source = fine-tuned CPSAM (from {self.cp_model_dir})")
             return models.CellposeModel(gpu=use_gpu, pretrained_model=str(self.cp_model_dir))
 
-        # Fallback: load state_dict into a scratch model
-        if self.fallback_weights.exists():
-            print(f"[Stage C] model_source = specialist (state_dict): {self.fallback_weights}")
+        if have_fallback:
+            print(f"[Stage C] model_source = fine-tuned CPSAM (state_dict): {self.fallback_weights}")
             import torch
-            m = models.CellposeModel(gpu=use_gpu, model_type=None)
+            m = models.CellposeModel(gpu=use_gpu, pretrained_model=None)
             sd = torch.load(str(self.fallback_weights), map_location="cpu")
             m.net.load_state_dict(sd, strict=False)
             return m
 
-        raise FileNotFoundError(
-            f"No model found at {self.cp_model_dir} or {self.fallback_weights}"
-        )
-
-        # -------------------- evaluation --------------------
-    
+        # Otherwise fall back to pretrained CPSAM
+        print("[Stage C] model_source = stock CPSAM (no fine-tuned weights found)")
+        return models.CellposeModel(gpu=use_gpu, pretrained_model="cpsam")
+        
+    # -------------------- evaluation --------------------
     def evaluate_images(self, split: str, args):
         """
         Minimal, diagnostic-first evaluation:

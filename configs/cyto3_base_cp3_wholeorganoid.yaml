@@ -24,11 +24,14 @@ train:
   channels: [0, 0]
 
 eval:
-  #based on cellpose4 (cellposesam API)
-  use_pretrained: true
-  model_type: cpsam
-  baseline_pretrained: true     # 👈 ensures we use vanilla cyto3
+  # optional: save panels / masks / prob maps
+  save_panels: true
+  save_rois: true
+  save_flows: true
+  save_prob: true
+  save_prob_view: true
 
+  
   # Thresholds
   flow_threshold: 0.4
   cellprob_threshold: 0.0
