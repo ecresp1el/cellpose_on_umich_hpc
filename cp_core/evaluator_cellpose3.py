@@ -314,17 +314,21 @@ def _load_all_images(files: List[Path]) -> Tuple[List[np.ndarray], List[Path]]:
         print("[Stage C][ERROR] No images could be loaded. Aborting eval soon.")
     return imgs, kept
 
-def _init_model_from_cfg(cfg) -> models.CellposeModel:
+def _init_model_from_cfg(cfg):
+    """Initialize a Cellpose model for evaluation (CP-SAM only)."""
     # prefer YAML train.pretrained_model if provided, else cpsam
     pm = (getattr(cfg, "train", None) or {}).get("pretrained_model", "cpsam")
+
     # version print
     try:
         cpv = getattr(cellpose, "__version__", "unknown")
     except AttributeError:
         from cellpose import __version__ as cpv
+
     print(f"[Stage C] Initializing Cellpose model (v{cpv}) with pretrained_model='{pm}', gpu=True")
+
     # init
-    model = models.CellposeModel(gpu=True, pretrained_model=pm)
+    model = CellposeModel(gpu=True, pretrained_model=pm)
     return model
 
 def _print_eval_kwargs(kwargs: dict):
