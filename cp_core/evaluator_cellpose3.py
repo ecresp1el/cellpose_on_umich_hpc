@@ -216,8 +216,10 @@ class EvaluatorCellpose3:
         if not hasattr(self, "model") or self.model is None:
             self.model = _init_model_from_cfg(self.cfg)
 
-        # 4) show kwargs
-        kw = getattr(args, "kwargs", {})  # EvalArgs.kwargs
+        # 4) show kwargs (filter out non-eval keys like save_* before calling CP)
+        kw = dict(getattr(args, "kwargs", {}))  # copy; don’t mutate original
+        for _bad in ("save_panels", "save_rois", "save_flows", "save_prob", "save_prob_view"):
+            kw.pop(_bad, None)
         _print_eval_kwargs(kw)
 
         # 5) run eval (batch)
