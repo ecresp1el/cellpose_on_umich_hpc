@@ -17,7 +17,7 @@ Notes
 from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 import json
 import csv
 
@@ -239,287 +239,190 @@ class EvaluatorCellpose3:
         )
 
         # -------------------- evaluation --------------------
-    def evaluate_images(self, split: str, args: EvalArgs) -> Dict[str, Any]:
-        """Run inference on a dataset split ('valid' or 'all') and write artifacts.
-
-        Returns
-        -------
-        dict
-            Aggregate stats for eval_summary.json
+    
+    def evaluate_images(self, split: str, args):
         """
-        # ---------------- discover images from the SNAPSHOT (not source YAML) ----------------
-        split = "valid" if split not in ("valid", "all") else split
-
-        def _cfg_get(obj, key):
-            return obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
-
-        paths = self.cfg.paths
-        labels = self.cfg.labels
-
-        img_root = Path(_cfg_get(paths, "data_images_valid" if split == "valid" else "data_images_train"))
-        lbl_root = Path(_cfg_get(paths, "data_labels_valid" if split == "valid" else "data_labels_train"))
-        mask_sfx = _cfg_get(labels, "mask_filter")
-
-        if not img_root or not img_root.exists():
-            raise RuntimeError(f"[Stage C] ERROR: snapshot image root not found for split={split}: {img_root}")
-
-        # Enumerate TIFFs from the snapshot root
-        image_paths = sorted(list(img_root.glob("*.tif")) + list(img_root.glob("*.tiff")))
-
-        # NEW: confirm snapshot sources and what's enumerated
-        print(f"[EVAL] enumerating images from snapshot: {img_root}", flush=True)
-        print(f"[EVAL] labels_dir={lbl_root}  mask_suffix={mask_sfx}", flush=True)
-        if len(image_paths) > 0:
-            print("[EVAL] first 3 stems:", [p.stem for p in image_paths[:3]], flush=True)
-
-        # ---------------- log eval args ----------------
-        print(
-            "[Stage C] Eval args:",
-            {
-                "channels": args.channels,
-                "normalize": args.normalize,
-                "niter": args.niter,
-                "bsize": args.bsize,
-                "flow_threshold": args.flow_threshold,
-                "cellprob_threshold": args.cellprob_threshold,
-                "split": split,
-                "n_images_found": len(image_paths),
-            },
-            flush=True,
-        )
-
-        model = self.load_model()
-
-        # capture environment to help reproduce eval
-        if cp_io is not None and hasattr(cp_io, "logger_setup"):
-            cp_io.logger_setup()
-
-        n_done = 0
-        per_image_stats: List[Dict[str, Any]] = []
-
-        for ip in image_paths:
-            print(f"[EVAL] reading: {ip}", flush=True)
-            img = self._read_image(ip)
-
-            # Effective shape used by CP3 given channels
-            H, W = img.shape[:2]
-            used_shape = (H, W) if args.channels == [0, 0] else (H, W, img.shape[-1])
-            print(
-                f"[EVAL][{ip.stem}] img.shape={tuple(img.shape)}  channels={args.channels}  used_shape={used_shape}",
-                flush=True
-            )
-
-            masks, flows, cellprob = self._eval_single(model, img, args)
-            paths_written = self._save_artifacts(ip, img, masks, flows, cellprob, args)
-
-            # per-image diagnostics
-            n_masks     = int(masks.max())
-            mask_pixels = int((masks > 0).sum())
-            prob_mean   = float(np.mean(cellprob))
-            prob_max    = float(np.max(cellprob))
-            pos_frac    = float((cellprob > args.cellprob_threshold).mean())
-
-            print(
-                f"[Stage C][{ip.name}] n_masks={n_masks} "
-                f"mask_px={mask_pixels} prob_mean={prob_mean:.3f} "
-                f"prob_max={prob_max:.3f} pos_frac@thr={pos_frac:.3f}",
-                flush=True,
-            )
-
-            per_image_stats.append({
-                "stem": ip.stem,
-                "paths": paths_written,
-                "n_masks": n_masks,
-                "mask_pixels": mask_pixels,
-                "prob_mean": prob_mean,
-                "prob_max": prob_max,
-                "pos_frac": pos_frac,
-                "shape": list(used_shape),   # record the effective shape actually used
-            })
-            n_done += 1
-
-        # ---------------- aggregate ----------------
-        agg = {
-            "n_images": n_done,
-            "mean_n_masks": float(np.mean([s["n_masks"] for s in per_image_stats])) if per_image_stats else 0.0,
-            "split": split,
-        }
-
-        # ---------------- write CSV for quick filtering ----------------
-        csv_path = self.eval_dir / "eval_metrics.csv"
-        with csv_path.open("w", newline="") as f:
-            writer = csv.DictWriter(
-                f,
-                fieldnames=["stem", "n_masks", "mask_pixels", "prob_mean", "prob_max", "pos_frac", "shape"]
-            )
-            writer.writeheader()
-            for s in per_image_stats:
-                writer.writerow({k: s.get(k) for k in writer.fieldnames})
-
-        # ---------------- console summary of zero-mask images ----------------
-        n_zero = sum(1 for s in per_image_stats if s["n_masks"] == 0)
-        print(f"[Stage C] zero-mask images: {n_zero}/{n_done}", flush=True)
-
-        # ---------------- write JSON summary ----------------
-        (self.eval_dir / "eval_summary.json").write_text(json.dumps({
-            "aggregate": agg,
-            "per_image": per_image_stats
-        }, indent=2))
-        print(f"[Stage C] Evaluated {n_done} image(s); wrote artifacts to {self.eval_dir}")
-        return agg
-
-    # -------------------- helpers --------------------
-    def _read_image(self, path: Path) -> np.ndarray:
-        """Read image using the official Cellpose I/O API.
-
-        Behavior:
-        - Delegates to cellpose.io.imread() (handles TIFF/PNG/JPG stacks)
-        - Returns array ready for model.eval()
-        - Still normalized to HWC layout via ensure_hwc_1to5()
+        Minimal, diagnostic-first evaluation:
+        - lists and loads images with per-file checks
+        - initializes model if needed
+        - runs batch eval with kwargs from args
+        - saves masks (+ optional panel)
         """
-        img = cp_io.imread(str(path))              # ← Cellpose official API
-        img = ensure_hwc_1to5(img, debug=False)    # keep consistent layout, drop trivial alpha, ≤5 channels
-        return img
+        # 0) resolve paths
+        img_key = f"data_images_{split}"
+        img_root = Path(self.cfg.paths[img_key])
+        out_dir = self.run_dir / "eval" / split
+        out_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[Stage C] Split='{split}', img_root={img_root}, out_dir={out_dir}")
 
-    def _eval_single(self, model, img: "np.ndarray", args) -> Tuple["np.ndarray", Any, "np.ndarray"]:
-        """Run Cellpose v3 eval and return (masks, flows, cellprob).
+        # 1) list files
+        files = _list_images(img_root)
+        if not files:
+            return {"n_images": 0}
 
-        Key points:
-        - Pass a *list* [img] to eval() to avoid CP treating H as batch.
-        - Unwrap the first item from lists returned by CP.
-        - Extract cellprob from flows robustly and fallback to zeros.
-        """
-        out = model.eval(
-            [img],                               # <-- IMPORTANT: pass a list
-            channels=args.channels,
-            normalize=args.normalize,
-            resample=False,                        # keep native grid
-            niter=args.niter,
-            bsize=args.bsize,
-            flow_threshold=args.flow_threshold,
-            cellprob_threshold=args.cellprob_threshold
-        )
+        # 2) load images (no channel slicing here)
+        print("[Stage C] Loading images (no channel manipulation in this step)…")
+        imgs, kept_files = _load_all_images(files)
+        if not imgs:
+            return {"n_images": 0}
 
-        if not isinstance(out, tuple):
-            raise RuntimeError(f"Unexpected eval() return type: {type(out)}")
+        # 3) model init (lazy)
+        if not hasattr(self, "model") or self.model is None:
+            self.model = _init_model_from_cfg(self.cfg)
 
-        if len(out) == 4:
-            masks, flows, _styles, _diams = out
-        elif len(out) == 3:
-            masks, flows, _styles = out
-        else:
-            raise RuntimeError(f"Unexpected number of values from eval(): {len(out)}")
+        # 4) show kwargs
+        kw = getattr(args, "kwargs", {})  # EvalArgs.kwargs
+        _print_eval_kwargs(kw)
 
-        # CP returns lists (one per input image) — unwrap index 0
-        masks = masks[0]
-        flows = flows[0]
-
-        # Extract cellprob / logits robustly
-        cellprob = None
-        if isinstance(flows, dict):
-            for k in ("cellprob", "p", "prob", "P"):
-                if k in flows:
-                    cellprob = flows[k]
-                    break
-        else:
-            # Some variants return a numpy stack (C,H,W); channel 2 often prob
-            if hasattr(flows, "ndim") and flows.ndim >= 3 and flows.shape[0] >= 3:
-                cellprob = flows[2].astype(np.float32, copy=False)
-
-        if cellprob is None:
-            cellprob = np.zeros(masks.shape, dtype=np.float32)
-
-        return masks, flows, cellprob
-
-    def _save_artifacts(
-        self,
-        ip: Path,
-        image: np.ndarray,
-        masks: np.ndarray,
-        flows: Any,
-        cellprob: np.ndarray,           # kept for compatibility
-        args: EvalArgs,
-    ) -> Dict[str, str]:
-        """
-        Save Cellpose-native outputs for a single image using the Cellpose API only.
-        - mask TIFF and *_seg.npy via cellpose.io.save_masks()
-        - QA segmentation panel via cellpose.plot.show_segmentation()
-        - optional ROIs via cellpose.io.save_rois()
-        """
-        if cp_io is None or not hasattr(cp_io, "save_masks"):
-            msg = "[Stage C] ERROR: cellpose.io.save_masks unavailable; cannot write artifacts."
-            print(msg, flush=True)
-            raise RuntimeError(msg)
-
-        written: Dict[str, str] = {}
-        stem = ip.stem
-
-        # ---------- 1) Canonical *_seg.npy + mask TIFF ----------
+        # 5) run eval (batch)
+        print(f"[Stage C] Running batch eval on {len(imgs)} image(s)…")
         try:
-            cp_io.imsave(str(self.eval_dir / f"{stem}_masks.tif"), masks.astype(np.uint16, copy=False))
-            f_mask = self.eval_dir / f"{stem}_masks.tif"
-            f_seg  = self.eval_dir / f"{stem}_seg.npy"
-           
-            if f_mask.exists(): written["masks"]   = str(f_mask)
-            if f_seg.exists():  written["seg_npy"] = str(f_seg)
-           
-            print(f"[Stage C][{stem}] saved via Cellpose API → {f_mask.name}, {f_seg.name}", flush=True)
-        
-        except Exception as e:
-            msg = f"[Stage C] ERROR: save_masks() failed for {stem}: {e}"
-            print(msg, flush=True)
-            raise
+            masks, flows, styles = self.model.eval(imgs, **kw)
+        except Exception as ex:
+            print(f"[Stage C][ERROR] model.eval failed: {ex}")
+            # early exit with zero written
+            return {"n_images": 0}
 
-        # ---------- 2) 1×4 Segmentation Panel via Cellpose API ----------
-        try:
-            # Output path for the panel
-            f_panel = self.d_panels / f"{stem}_panel_1x4.png"
+        # 6) validate outputs
+        if not _validate_batch_outputs(masks, flows, styles, n_expected=len(imgs)):
+            print("[Stage C][ERROR] Output validation failed; stopping to avoid writing inconsistent artifacts.")
+            return {"n_images": 0}
 
-            # Convert CP3-style dict flows to RGB flow (optional but recommended for display)
-            flow_rgb = None
-            if isinstance(flows, dict) and "dP" in flows:
-                # flows['dP'] is (2, H, W) → convert to RGB flow visualization
-                flow_rgb = plot.dx_to_circ(flows["dP"])
+        # 7) save artifacts
+        print("[Stage C] Saving outputs…")
+        n_images = 0
+        for i, p in enumerate(kept_files):
+            try:
+                stem = p.stem
 
-            # Create a figure handle for Cellpose’s plotting function
-            fig = plt.figure(figsize=(12, 5))
+                # save mask
+                mpath = out_dir / f"{stem}_masks.tif"
+                cp_io.imsave(mpath, masks[i])
+                print(f"[Stage C] wrote: {mpath.name} (n_masks={int(getattr(masks[i],'max',lambda:0)())})")
 
-            # Use positional args per CP3 API: (fig, img, maski, flowi, channels, file_name)
-            plot.show_segmentation(
-                fig,
-                image,
-                masks,
-                flow_rgb,
-                self.cfg.eval.get("channels", [0, 0]),
-                str(f_panel)  # file_name → Cellpose saves the panels directly
-            )
+                # optional: 1x4 panel (guarded)
+                if (self.cfg.eval or {}).get("save_panels", True):
+                    try:
+                        import matplotlib.pyplot as plt
+                        fig = plt.figure(figsize=(12, 5))
+                        # NOTE: use flows[i], not flows[0] (per-image)
+                        plot.show_segmentation(fig, imgs[i], masks[i], flows[i])
+                        fig.tight_layout()
+                        fig.savefig(out_dir / f"{stem}_panel_1x4.png", dpi=150)
+                        plt.close(fig)
+                        print(f"[Stage C] wrote: {stem}_panel_1x4.png")
+                    except Exception as ex:
+                        print(f"[Stage C][WARN] panel failed for {p.name}: {ex}")
 
-            plt.close(fig)
-            written["panel_png"] = str(f_panel)
-            print(f"[Panel][{stem}] saved panel: {f_panel}", flush=True)
+                n_images += 1
 
-        except Exception as e:
-            print(f"[Panel][{stem}] WARN: plot.show_segmentation failed: {e}", flush=True)
+            except Exception as ex:
+                print(f"[Stage C][ERROR] saving failed for {p.name}: {ex}")
 
-        # ---------- 3) Optional ROIs ----------
-        if args.save_rois:
-            if hasattr(cp_io, "save_rois"):
-                base = (self.d_rois / stem).with_suffix("")  # cp_io appends .zip
-                cp_io.save_rois(masks.astype(np.uint16, copy=False), str(base))
-                written["rois_zip"] = str(base) + ".zip"
-                print(f"[Stage C][{stem}] saved rois: {written['rois_zip']}", flush=True)
-            else:
-                print(f"[Stage C][{stem}] ERROR: cellpose.io.save_rois unavailable; skipping ROIs.", flush=True)
+        print(f"[Stage C] Done. images={n_images}")
+        return {"n_images": n_images}
 
-        # ---------- 4) Minimal JSON summary (optional) ----------
-        f_json = self.d_json / f"{stem}_summary.json"
-        f_json.write_text(json.dumps({
-            "image": str(ip),
-            "masks_tif": written.get("masks"),
-            "seg_npy": written.get("seg_npy"),
-            "panel_png": written.get("panel_png"),
-            "rois_zip": written.get("rois_zip"),
-        }, indent=2))
-        written["summary_json"] = str(f_json)
+# -----------------------------
+# DIAGNOSTIC HELPERS (no channel ops here)
+# -----------------------------
+def _list_images(img_dir: Path) -> List[Path]:
+    print(f"[Stage C] Scanning dir: {img_dir}")
+    exts = {".tif", ".tiff", ".png", ".jpg", ".jpeg"}
+    files = sorted([p for p in img_dir.iterdir() if p.suffix.lower() in exts])
+    print(f"[Stage C] Found {len(files)} candidate image(s).")
+    if len(files) == 0:
+        print("[Stage C][ERROR] No images found. Check your split path and extensions.")
+    else:
+        print("[Stage C] First few files:", [f.name for f in files[:5]])
+    return files
 
-        return written
+def _safe_read_image(p: Path) -> Optional[np.ndarray]:
+    try:
+        im = cp_io.imread(p)
+        if im is None:
+            print(f"[Stage C][WARN] imread returned None for: {p.name}")
+            return None
+        if not isinstance(im, np.ndarray):
+            print(f"[Stage C][WARN] imread did not return ndarray for: {p.name} (type={type(im)})")
+            return None
+        if np.any(np.isnan(im)) or np.any(np.isinf(im)):
+            print(f"[Stage C][WARN] NaN/Inf detected in image: {p.name}")
+        # basic stats
+        print(f"[Stage C] Loaded {p.name}: shape={im.shape}, dtype={im.dtype}, min={np.min(im)}, max={np.max(im)}")
+        if im.ndim >= 3 and im.shape[-1] > 3:
+            print(f"[Stage C][NOTE] {p.name} has >3 channels (C={im.shape[-1]}). CP-SAM only uses first 3. (We are NOT slicing here.)")
+        return im
+    except Exception as ex:
+        print(f"[Stage C][ERROR] Failed to read {p.name}: {ex}")
+        return None
+
+def _load_all_images(files: List[Path]) -> Tuple[List[np.ndarray], List[Path]]:
+    imgs, kept = [], []
+    for p in files:
+        im = _safe_read_image(p)
+        if im is not None:
+            imgs.append(im)
+            kept.append(p)
+    print(f"[Stage C] Loaded {len(imgs)}/{len(files)} image(s) successfully.")
+    if len(imgs) == 0:
+        print("[Stage C][ERROR] No images could be loaded. Aborting eval soon.")
+    return imgs, kept
+
+def _init_model_from_cfg(cfg) -> models.CellposeModel:
+    # prefer YAML train.pretrained_model if provided, else cpsam
+    pm = (getattr(cfg, "train", None) or {}).get("pretrained_model", "cpsam")
+    # version print
+    try:
+        cpv = getattr(models, "__version__", "unknown")
+    except AttributeError:
+        from cellpose import __version__ as cpv
+    print(f"[Stage C] Initializing Cellpose model (v{cpv}) with pretrained_model='{pm}', gpu=True")
+    # init
+    model = models.CellposeModel(gpu=True, pretrained_model=pm)
+    return model
+
+def _print_eval_kwargs(kwargs: dict):
+    print("[Stage C] Eval kwargs to be passed to model.eval():")
+    if not kwargs:
+        print("  (none) → using library defaults")
+        return
+    for k, v in kwargs.items():
+        if k == "normalize" and isinstance(v, dict):
+            print(f"  {k}: dict keys={list(v.keys())}")
+        else:
+            print(f"  {k}: {v}")
+
+def _validate_batch_outputs(masks, flows, styles, n_expected: int) -> bool:
+    ok = True
+    # length checks
+    try:
+        n_masks = len(masks)
+    except Exception:
+        print("[Stage C][ERROR] masks is not indexable. Got:", type(masks))
+        return False
+    if n_masks != n_expected:
+        print(f"[Stage C][ERROR] Output count mismatch: masks={n_masks} vs images={n_expected}")
+        ok = False
+    try:
+        n_flows = len(flows)
+    except Exception:
+        print("[Stage C][ERROR] flows is not indexable. Got:", type(flows))
+        return False
+    if n_flows != n_expected:
+        print(f"[Stage C][ERROR] Output count mismatch: flows={n_flows} vs images={n_expected}")
+        ok = False
+    try:
+        _ = styles  # styles can be array or list; don’t over-constrain
+    except Exception as ex:
+        print(f"[Stage C][WARN] styles access issue: {ex}")
+    # sample prints
+    try:
+        print(f"[Stage C] Example mask shape={getattr(masks[0], 'shape', 'NA')} dtype={getattr(masks[0], 'dtype', 'NA')} max={getattr(masks[0], 'max', lambda: 'NA')() if hasattr(masks[0],'max') else 'NA'}")
+        if isinstance(flows, (list, tuple)) and len(flows) > 0:
+            f0 = flows[0]
+            if isinstance(f0, (list, tuple)) and len(f0) >= 3:
+                f_xy, f_vec, cellprob = f0[0], f0[1], f0[2]
+                print(f"[Stage C] Example flows[0]: HSV={getattr(f_xy,'shape','NA')}, vec={getattr(f_vec,'shape','NA')}, prob={getattr(cellprob,'shape','NA')}")
+    except Exception as ex:
+        print(f"[Stage C][WARN] Could not print example outputs: {ex}")
+    return ok
