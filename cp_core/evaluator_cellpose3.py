@@ -151,8 +151,7 @@ class EvaluatorCellpose3:
 
         Only one fine-tuning round is ever supported.
         """
-        assert models is not None, "cellpose.models not available."
-
+        assert CellposeModel is not None, "CellposeModel not available."
         # Detect GPU
         try:
             import torch
@@ -166,12 +165,12 @@ class EvaluatorCellpose3:
 
         if have_cp_dir:
             print(f"[Stage C] model_source = fine-tuned CPSAM (from {self.cp_model_dir})")
-            return models.CellposeModel(gpu=use_gpu, pretrained_model=str(self.cp_model_dir))
+            return CellposeModel(gpu=use_gpu, pretrained_model=str(self.cp_model_dir))
 
         if have_fallback:
             print(f"[Stage C] model_source = fine-tuned CPSAM (state_dict): {self.fallback_weights}")
             import torch
-            m = models.CellposeModel(gpu=use_gpu, pretrained_model=None)
+            m = CellposeModel(gpu=use_gpu, pretrained_model=None)
             sd = torch.load(str(self.fallback_weights), map_location="cpu")
             m.net.load_state_dict(sd, strict=False)
             return m
@@ -320,7 +319,7 @@ def _init_model_from_cfg(cfg) -> models.CellposeModel:
     pm = (getattr(cfg, "train", None) or {}).get("pretrained_model", "cpsam")
     # version print
     try:
-        cpv = getattr(models, "__version__", "unknown")
+        cpv = getattr(cellpose, "__version__", "unknown")
     except AttributeError:
         from cellpose import __version__ as cpv
     print(f"[Stage C] Initializing Cellpose model (v{cpv}) with pretrained_model='{pm}', gpu=True")
