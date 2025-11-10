@@ -48,7 +48,11 @@ else
   eval "$("$CONDA_BASE/bin/conda" shell.bash hook)"
 fi
 conda activate "${ENV_NAME}"
-export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
+
+# (optional but safe) ensure imports like `from cp_core...` work without PYTHONPATH
+cd "${REPO_ROOT}"
+# quick sanity: confirm cellpose is visible in THIS job
+python -c "import cellpose, sys; print('[CHECK] cellpose:', getattr(cellpose,'__version__','?'), getattr(cellpose,'__file__','?'))"
 
 # ---------------------- Install dependencies if missing ---------------------
 
@@ -70,6 +74,9 @@ SNAP="${RUN_DIR}/cfg/config_snapshot.yml"
 [[ -f "$SNAP" ]] || SNAP="${RUN_DIR}/cfg/config_snapshot.yaml"
 if [[ ! -f "$SNAP" ]]; then
   echo "[ERROR] No snapshot at ${RUN_DIR}/cfg/config_snapshot.yaml"; exit 2; fi
+
+python -c "import sys; print('PY:', sys.executable)"
+python -c "import cellpose, inspect; print('cellpose:', getattr(cellpose,'__version__','?'), getattr(cellpose,'__file__','?'))"
 
 # --- Run Stage C on CPU using the run snapshot (no YAML edits) ---
 echo
