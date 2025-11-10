@@ -129,9 +129,14 @@ class EvaluatorCellpose3:
         # Shows the detected Cellpose version and which parameters will be passed through.
         print(f"[Stage C] Detected Cellpose v{cpv}")
         print(f"[Stage C] Eval args used: {list(eval_kwargs.keys())}")
+        
+        
+        # (safety) drop any train/loader keys that may have leaked into eval
+        for _bad in ("use_pretrained", "model_type", "baseline_pretrained", "pretrained_model"):
+            eval_kwargs.pop(_bad, None)
 
         # Return EvalArgs dataclass (same as before)
-        return EvalArgs(**eval_kwargs)
+        return EvalArgs(kwargs=eval_kwargs)
 
 
     # -------------------- model loading --------------------
