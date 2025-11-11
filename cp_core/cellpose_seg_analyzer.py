@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, Tuple, Optional, List
+from typing import Any, Tuple, Optional, List
 
 import numpy as np
 
@@ -230,6 +230,20 @@ def _arr_info(arr):
             pass
     return info
 
+def _spatial_hw_raw(a):
+    """Derive spatial (H,W) from raw array WITHOUT modifying it.
+       If RGB(A)-like (..., H, W, C), treat H=shape[-3], W=shape[-2]."""
+    if a is None or not hasattr(a, "shape"):
+        return None
+    sh = a.shape
+    # RGB(A)-like (..., H, W, C)
+    if len(sh) >= 3 and sh[-1] in (3, 4):
+        return (sh[-3], sh[-2])
+    # Generic: last two dims
+    if len(sh) >= 2:
+        return (sh[-2], sh[-1])
+    return None
+
 def probe_seg_npy(path):
     """Load a *_seg.npy and summarize contents (AS-IS)."""
     p = Path(path)
@@ -276,15 +290,14 @@ def probe_seg_npy(path):
     if isinstance(flows, (list, tuple)) and masks is not None and masks_ndim == 2:
         f0 = flows[0] if len(flows) > 0 else None
         f1 = flows[1] if len(flows) > 1 else None
+        m_hw = (masks_shape[-2], masks_shape[-1])
         if f0 is not None and hasattr(f0, "shape"):
-            f0_hw = (f0.shape[-2], f0.shape[-1]) if f0.ndim >= 2 else None
-            m_hw  = (masks_shape[-2], masks_shape[-1])
+            f0_hw = _spatial_hw_raw(f0)
             if f0_hw and f0_hw != m_hw:
                 checks["ok"] = False
                 checks["notes"].append(f"flows[0] spatial {f0_hw} != masks {m_hw} (raw)")
         if f1 is not None and hasattr(f1, "shape"):
-            f1_hw = (f1.shape[-2], f1.shape[-1]) if f1.ndim >= 2 else None
-            m_hw  = (masks_shape[-2], masks_shape[-1])
+            f1_hw = _spatial_hw_raw(f1)
             if f1_hw and f1_hw != m_hw:
                 checks["ok"] = False
                 checks["notes"].append(f"flows[1] spatial {f1_hw} != masks {m_hw} (raw)")
@@ -378,14 +391,15 @@ SPEC_TEXT = [
 ]
 
 def _raw_spatial_hw(a):
-    """Derive spatial (H,W) from raw array WITHOUT modifying it."""
+    """Derive spatial (H,W) from raw array WITHOUT modifying it.
+       If RGB(A)-like (..., H, W, C), treat H=shape[-3], W=shape[-2]."""
     if a is None or not hasattr(a, "shape"):
         return None
     sh = a.shape
-    # RGB(A)-like (..., H, W, C): use last two dims as H,W
+    # RGB(A)-like (..., H, W, C)
     if len(sh) >= 3 and sh[-1] in (3, 4):
-        return (sh[-2], sh[-1])
-    # Generic: use the last two dims as (H, W)
+        return (sh[-3], sh[-2])
+    # Generic: last two dims
     if len(sh) >= 2:
         return (sh[-2], sh[-1])
     return None
@@ -393,10 +407,7 @@ def _raw_spatial_hw(a):
 def audit_raw_seg_dict(dat: dict) -> Tuple[List[Finding], dict]:
     f: List[Finding] = []
 
-    # --- SPEC SECTION ---
-    # We print the spec separately in the report printer.
-
-    # --- OBSERVED vs SPEC CHECKS (AS-IS) ---
+    # OBSERVED vs SPEC CHECKS (AS-IS)
     keys = set(dat.keys())
     missing = SPEC_REQUIRED_KEYS - keys
     if missing:
@@ -494,7 +505,6 @@ def audit_raw_seg_dict(dat: dict) -> Tuple[List[Finding], dict]:
         except Exception:
             values = repr(chans)
         f.append(Finding("INFO","CHANNELS.VALUE",f"channels raw value={values}"))
-        # light expectation (no coercion)
         try:
             if isinstance(values, list) and len(values) != 2:
                 f.append(Finding("WARN","CHANNELS.EXPECT","expected two ints like [0,0] or [2,1]"))
@@ -526,13 +536,10 @@ def audit_raw_seg_dict(dat: dict) -> Tuple[List[Finding], dict]:
 
 def print_audit_raw_report(path: str, findings: List[Finding], meta: dict):
     print(f"\n=== AUDIT-RAW {path} ===")
-    # SPEC section
     print("[spec] Cellpose v4 save expectations:")
     for line in meta.get("spec_lines", []):
         print("  -", line)
-    # OBSERVED header
     print(f"\n[observed] keys={meta.get('keys', [])}")
-    # CHECKS grouped
     print(f"\n[status] {meta['status']}")
     for lvl in ("ERROR","WARN","OK","INFO"):
         group = [x for x in findings if x.level==lvl]
