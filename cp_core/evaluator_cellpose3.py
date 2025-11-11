@@ -265,8 +265,21 @@ class EvaluatorCellpose3:
                     try:
                         # Prepare image for plotting: CxHxW -> HxWxC (matplotlib wants HWC)
                         im_plot = imgs[i]
-                        if im_plot.ndim == 3 and im_plot.shape[0] in (1, 3):
-                            im_plot = np.moveaxis(im_plot, 0, -1)
+                        # Use HxWxC for plotting (your imgs are CxHxW)
+                        # Prepare image for panel: smallest dimension = channels → move to last (HxWxC)
+                        if im_plot.ndim == 3:
+                            ch_axis = int(np.argmin(im_plot.shape))          # pick the smallest dim as channels
+                            n_ch = int(im_plot.shape[ch_axis])
+                            if ch_axis != 2:
+                                im_plot = np.moveaxis(im_plot, ch_axis, -1)  # -> HxWxC
+
+                            # For plotting, enforce ≤3 channels (CP-SAM/plotting expects RGB/gray)
+                            if n_ch > 3:
+                                print(f"[Stage C][panel] detected {n_ch} channels; using first 3 for panel")
+                                im_plot = im_plot[..., :3]
+                            print(f"[Stage C][panel] channel_axis={ch_axis} n_channels={n_ch} → im_plot={im_plot.shape} {im_plot.dtype}")
+                        else:
+                            print(f"[Stage C][panel] grayscale image; im_plot={im_plot.shape} {im_plot.dtype}")
 
                         # Use the per-image flow pack (list/tuple: [HSV, vec, prob, ...])
                         fpack = flows[i][0] if isinstance(flows[i], (list, tuple)) else flows[i]
@@ -284,7 +297,7 @@ class EvaluatorCellpose3:
 
                         fig = plt.figure(figsize=(12, 5))
                         # IMPORTANT: pass the per-image flow pack (fpack), not the whole flows[i] list-of-lists
-                        plot.show_segmentation(fig, im_plot, masks[i], fpack)
+                        plot.show_segmentation(fig, im_plot, masks[i], fpack)  # where fpack = (HSV, vec, prob)
                         fig.tight_layout()
                         panel_path = out_dir / f"{stem}_panel_1x4.png"
                         fig.savefig(panel_path, dpi=150)
