@@ -230,8 +230,10 @@ class EvaluatorCellpose3:
         except Exception as ex:
             print(f"[Stage C][WARN] Could not print example outputs: {ex}")
 
+        
         # 7) save artifacts
         print("[Stage C] Saving outputs…")
+        n_masks_per_image = []
         for i, p in enumerate(kept_files):
             try:
                 stem = p.stem
@@ -240,7 +242,9 @@ class EvaluatorCellpose3:
 
                 # Save mask via official API (TIF), same filename convention
                 _save_masks_api(imgs[i], masks[i], fpack, stem, out_dir)
-                print(f"[Stage C] (n_masks={int(getattr(masks[i],'max',lambda:0)())})")
+                nm = int(getattr(masks[i], "max", lambda: 0)())
+                n_masks_per_image.append(nm)
+                print(f"[Stage C] (n_masks={nm})")
 
                 # Save native *_seg.npy via API + print its metadata (v4 signature w/ diams + channels)
                 _save_seg_npy_api(imgs[i], masks[i], fpack, stem, out_dir, kw.get("channels", [0, 0]), diams[i])
@@ -248,6 +252,7 @@ class EvaluatorCellpose3:
                 # optional: panels etc. left as-is in your existing code…
             except Exception as ex:
                 print(f"[Stage C][WARN] Save failed for {p.name}: {ex}")
+                n_masks_per_image.append(0)
 
         # 8) persist eval kwargs
         try:
@@ -255,6 +260,20 @@ class EvaluatorCellpose3:
         except Exception as ex:
             print(f"[Stage C][WARN] could not write eval kwargs json: {ex}")
 
+        # 9) return an aggregation dict expected by experiment.py
+        try:
+            seg_paths = sorted(str(p) for p in (out_dir.glob("*_seg.npy")))
+        except Exception:
+            seg_paths = []
+        agg = {
+            "n_images": len(kept_files),
+            "n_masks_total": int(sum(nm for nm in n_masks_per_image if isinstance(nm, int))),
+            "n_masks_per_image": n_masks_per_image,
+            "eval_dir": str(out_dir),
+            "seg_files": seg_paths,
+        }
+        print(f"[Stage C] Wrote eval artifacts. Split={split}, images={agg['n_images']}, masks_total={agg['n_masks_total']}")
+        return agg
 
 # -------------------- save helpers (official I/O only) --------------------
 
@@ -307,15 +326,6 @@ def _save_masks_api(im, m, fpack, stem: str, out_dir: Path) -> None:
         savedir=None, in_folders=False
     )
     print(f"[Stage C] save_masks (API) wrote: {stem}_masks.tif")
-
-# Optional (disabled by default)
-def _save_rois_api(m, stem: str, out_dir: Path) -> None:
-    """
-    Save ImageJ ROIs zip via API (disabled unless you call it).
-    """
-    zip_path = str(out_dir / f"{stem}_rois.zip")
-    cp_io.save_rois(m, zip_path)
-    print(f"[Stage C] save_rois (API) wrote: {Path(zip_path).name}")
 
 
 # -------------------- dataset manager (abbrev; unchanged portions elided) --------------------
