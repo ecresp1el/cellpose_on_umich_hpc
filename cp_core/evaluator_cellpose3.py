@@ -253,13 +253,16 @@ class EvaluatorCellpose3:
         for i, p in enumerate(kept_files):
             try:
                 stem = p.stem
+                
+                # per-image flow pack (HSV, vec, prob, ...)
+                fpack = flows[i][0] if isinstance(flows[i], (list, tuple)) else flows[i]
 
                 # Save mask via official API (TIF), same filename convention
-                _save_masks_api(imgs[i], masks[i], flows[i], stem, out_dir)
+                _save_masks_api(imgs[i], masks[i], fpack, stem, out_dir)
                 print(f"[Stage C] (n_masks={int(getattr(masks[i],'max',lambda:0)())})")
 
                 # Save native *_seg.npy via API + print its metadata
-                _save_seg_npy_api(imgs[i], masks[i], flows[i], stem, out_dir)
+                _save_seg_npy_api(imgs[i], masks[i], fpack, stem, out_dir)
 
                 # If you later want ROIs, uncomment:
                 # _save_rois_api(masks[i], stem, out_dir)
