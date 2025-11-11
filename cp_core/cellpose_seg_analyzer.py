@@ -115,16 +115,58 @@ def analyze_seg_npy(seg_path: str, expect_mask_shape: Optional[Tuple[int,int]] =
     print("ismanual:", type(ismanual).__name__, f"len={len(ismanual)}" if hasattr(ismanual,"__len__") else None)
     print("zdraw:",    type(zdraw).__name__, f"len={len(zdraw)}" if hasattr(zdraw,"__len__") else None)
 
-    if isinstance(flows, (list, tuple)):
-        print(f"flows: list len={len(flows)}")
-        # Common mapping in docs:
-        # flows[0]=XY flow in RGB; flows[1]=cellprob 0-255; flows[2]=Z flow (or zeros);
-        # flows[3]=[dY,dX,cellprob] (or [dZ,dY,dX,cellprob]); flows[4]=pixel destinations
-        for idx, comp in enumerate(flows):
-            print(f"  flows[{idx}]: shape={_fmt_shape(comp)} dtype={_fmt_dtype(comp)}")
-    else:
-        print("flows: None or unexpected type:", type(flows).__name__)
+    # ----- ismanual summary (counts) -----
+    if isinstance(ismanual, np.ndarray):
+        n_true = int(np.count_nonzero(ismanual))
+        n_total = int(ismanual.size)
+        print(f"ismanual summary: true={n_true}  false={n_total - n_true}  total={n_total}")
+        print("  note: ismanual[k] == True if mask k was drawn manually in GUI; False if computed by Cellpose.")
 
+    # ----- flows mapping with v4 normalization (squeeze batch dim if present) -----
+    def _squeeze1(x):
+        return x[0] if isinstance(x, np.ndarray) and x.ndim >= 1 and x.shape[0] == 1 else x
+
+    def _mm(x):
+        try:
+            import numpy as _np
+            return f"min={_np.nanmin(x):.3f} max={_np.nanmax(x):.3f}"
+        except Exception:
+            return "min/max=NA"
+
+    if isinstance(flows, (list, tuple)):
+        # v4 typical pack (may vary by build):
+        #  flows[0] = XY flow RGB viz (uint8)            (1,H,W,3) or (H,W,3)
+        #  flows[1] = cell probability 0..255 (uint8)    (1,H,W)   or (H,W)
+        #  flows[2] = Z flow 0..255 (uint8, zeros in 2D) (1,H,W,3) or (H,W,3)
+        #  flows[3] = optional pack / None
+        #  flows[4] = [dY, dX, cellprob] float32 (or [dZ, dY, dX, cellprob] in 3D)
+        hsv_rgb   = _squeeze1(flows[0]) if len(flows) > 0 else None
+        prob_255  = _squeeze1(flows[1]) if len(flows) > 1 else None
+        zflow_255 = _squeeze1(flows[2]) if len(flows) > 2 else None
+        pack_3    = flows[3]            if len(flows) > 3 else None
+        dydxprob  = flows[4]            if len(flows) > 4 else None
+
+        print("\n[flows mapping]")
+        print("  flows[0] = XY flow (RGB viz):       ", str(getattr(hsv_rgb,'shape',None)),  str(getattr(hsv_rgb,'dtype',None)),  _mm(hsv_rgb))
+        print("  flows[1] = cell probability (0-255):", str(getattr(prob_255,'shape',None)), str(getattr(prob_255,'dtype',None)), _mm(prob_255))
+        print("  flows[2] = Z flow (0-255):           ", str(getattr(zflow_255,'shape',None)),str(getattr(zflow_255,'dtype',None)),_mm(zflow_255))
+        print("  flows[3] = optional pack (legacy):   ", str(getattr(pack_3,'shape',None)),    str(getattr(pack_3,'dtype',None)))
+        print("  flows[4] = [dY, dX, cellprob] f32:   ", str(getattr(dydxprob,'shape',None)),  str(getattr(dydxprob,'dtype',None)), _mm(dydxprob))
+
+        # If flows[4] present, break into components
+        if isinstance(dydxprob, np.ndarray) and dydxprob.ndim >= 3 and dydxprob.shape[0] in (3, 4):
+            names = ["dY", "dX", "cellprob"] if dydxprob.shape[0] == 3 else ["dZ", "dY", "dX", "cellprob"]
+            for idx, name in enumerate(names):
+                comp = dydxprob[idx]
+                print(f"    flows[4][{idx}] = {name}: shape={getattr(comp,'shape',None)} dtype={getattr(comp,'dtype',None)} {_mm(comp)}")
+
+    print("\n[legend]")
+    print("  ismanual[k]: True if mask k drawn by hand in GUI, False if computed")
+    print("  flows[0]: XY flow field visualization (RGB/HSV-like) used for display")
+    print("  flows[1]: cell probability as uint8 (0..255)")
+    print("  flows[2]: Z-flow as uint8 (zeros for 2D)")
+    print("  flows[4]: raw fields (float32): [dY, dX, cellprob] for 2D  |  [dZ, dY, dX, cellprob] for 3D")
+    
     if expect_mask_shape and hasattr(masks, "shape"):
         if tuple(masks.shape) != tuple(expect_mask_shape):
             print(f"[WARN] mask shape {masks.shape} != expected {expect_mask_shape}")
