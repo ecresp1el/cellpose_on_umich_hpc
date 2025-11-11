@@ -24,13 +24,11 @@ train:
   channels: [0, 0]
 
 eval:
-  # optional: save panels / masks / prob maps
-  save_panels: true
-  save_rois: true
-  save_flows: true
-  save_prob: true
-  save_prob_view: true
-
+  save_panels: true   # honored (panels saved, assuming plotting succeeds)
+  save_rois: true     # ignored in current code (no ROI write block)
+  save_flows: true    # ignored in current code (no flows write block)
+  save_prob: true     # ignored in current code (no prob write block)
+  save_prob_view: true # ignored in current code (no prob_view write block)
   
   # Thresholds
   flow_threshold: 0.4

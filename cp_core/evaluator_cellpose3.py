@@ -22,6 +22,8 @@ import json
 import csv
 import time
 
+from matplotlib
+matplotlib.use("Agg")  # headless backend for SLURM jobs
 from matplotlib import pyplot as plt
 import numpy as np
 
@@ -258,19 +260,39 @@ class EvaluatorCellpose3:
                 print(f"[Stage C] wrote: {mpath.name} (n_masks={int(getattr(masks[i],'max',lambda:0)())})")
 
                 # optional: 1x4 panel (guarded)
+                print(f"[Stage C][debug] save_panels flag = {(self.cfg.eval or {}).get('save_panels', True)}")
                 if (self.cfg.eval or {}).get("save_panels", True):
                     try:
-                        import matplotlib.pyplot as plt
+                        # Prepare image for plotting: CxHxW -> HxWxC (matplotlib wants HWC)
+                        im_plot = imgs[i]
+                        if im_plot.ndim == 3 and im_plot.shape[0] in (1, 3):
+                            im_plot = np.moveaxis(im_plot, 0, -1)
+
+                        # Use the per-image flow pack (list/tuple: [HSV, vec, prob, ...])
+                        fpack = flows[i][0] if isinstance(flows[i], (list, tuple)) else flows[i]
+                        hsv  = fpack[0] if isinstance(fpack, (list, tuple)) and len(fpack) > 0 else None
+                        vec  = fpack[1] if isinstance(fpack, (list, tuple)) and len(fpack) > 1 else None
+                        prob = fpack[2] if isinstance(fpack, (list, tuple)) and len(fpack) > 2 else None
+
+                        # Diagnostics before plotting
+                        print(
+                            "[Stage C][panel] "
+                            f"im_plot={getattr(im_plot,'shape','?')} {getattr(im_plot,'dtype','?')} | "
+                            f"mask={getattr(masks[i],'shape','?')} {getattr(masks[i],'dtype','?')} | "
+                            f"hsv={getattr(hsv,'shape','?')} vec={getattr(vec,'shape','?')} prob={getattr(prob,'shape','?')}"
+                        )
+
                         fig = plt.figure(figsize=(12, 5))
-                        # NOTE: use flows[i], not flows[0] (per-image)
-                        plot.show_segmentation(fig, imgs[i], masks[i], flows[i])
+                        # IMPORTANT: pass the per-image flow pack (fpack), not the whole flows[i] list-of-lists
+                        plot.show_segmentation(fig, im_plot, masks[i], fpack)
                         fig.tight_layout()
-                        fig.savefig(out_dir / f"{stem}_panel_1x4.png", dpi=150)
+                        panel_path = out_dir / f"{stem}_panel_1x4.png"
+                        fig.savefig(panel_path, dpi=150)
                         plt.close(fig)
-                        print(f"[Stage C] wrote: {stem}_panel_1x4.png")
+                        print(f"[Stage C] wrote: {panel_path.name}")
                     except Exception as ex:
                         print(f"[Stage C][WARN] panel failed for {p.name}: {ex}")
-
+        
                 n_images += 1
 
             except Exception as ex:
@@ -282,16 +304,6 @@ class EvaluatorCellpose3:
 # -----------------------------
 # DIAGNOSTIC HELPERS (no channel ops here)
 # -----------------------------
-def _list_images(img_dir: Path) -> List[Path]:
-    print(f"[Stage C] Scanning dir: {img_dir}")
-    exts = {".tif", ".tiff", ".png", ".jpg", ".jpeg"}
-    files = sorted([p for p in img_dir.iterdir() if p.suffix.lower() in exts])
-    print(f"[Stage C] Found {len(files)} candidate image(s).")
-    if len(files) == 0:
-        print("[Stage C][ERROR] No images found. Check your split path and extensions.")
-    else:
-        print("[Stage C] First few files:", [f.name for f in files[:5]])
-    return files
 
 def _safe_read_image(p: Path) -> Optional[np.ndarray]:
     try:
@@ -387,3 +399,4 @@ def _validate_batch_outputs(masks, flows, styles, n_expected: int) -> bool:
     except Exception as ex:
         print(f"[Stage C][WARN] Could not print example outputs: {ex}")
     return ok
+
