@@ -268,17 +268,23 @@ class EvaluatorCellpose3:
                         # Use HxWxC for plotting (your imgs are CxHxW)
                         # Prepare image for panel: smallest dimension = channels → move to last (HxWxC)
                         if im_plot.ndim == 3:
+                            
+                            # Identify the channel axis as the smallest dimension
                             ch_axis = int(np.argmin(im_plot.shape))          # pick the smallest dim as channels
                             n_ch = int(im_plot.shape[ch_axis])
+                            
+                            # Move channels to last (HxWxC)
                             if ch_axis != 2:
                                 im_plot = np.moveaxis(im_plot, ch_axis, -1)  # -> HxWxC
-
+                            
+                            # If more than 3 channels, keep only the first 3 for RGB-style plotting
                             # For plotting, enforce ≤3 channels (CP-SAM/plotting expects RGB/gray)
                             if n_ch > 3:
                                 print(f"[Stage C][panel] detected {n_ch} channels; using first 3 for panel")
                                 im_plot = im_plot[..., :3]
                             print(f"[Stage C][panel] channel_axis={ch_axis} n_channels={n_ch} → im_plot={im_plot.shape} {im_plot.dtype}")
                         else:
+                            # 2D / grayscale case
                             print(f"[Stage C][panel] grayscale image; im_plot={im_plot.shape} {im_plot.dtype}")
 
                         # Use the per-image flow pack (list/tuple: [HSV, vec, prob, ...])
