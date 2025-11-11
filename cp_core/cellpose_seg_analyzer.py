@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple, Optional, List
@@ -40,7 +38,7 @@ def _print_header(title: str):
 
 
 # -----------------------
-# channel-axis heuristic
+# channel-axis heuristic (for image-only inspection)
 # -----------------------
 def detect_channel_axis(arr: np.ndarray) -> Tuple[Optional[int], Optional[int]]:
     """
@@ -86,7 +84,7 @@ SEG_EXPECTED_KEYS = {
 }
 
 def analyze_seg_npy(seg_path: str, expect_mask_shape: Optional[Tuple[int,int]] = None):
-    """Load a single *_seg.npy and print keys + shapes/dtypes + quick sanity."""
+    """Load a single *_seg.npy and print keys + shapes/dtypes + quick sanity (AS-IS)."""
     p = Path(seg_path)
     _print_header(f"[SEG] {p.name}")
     try:
@@ -115,14 +113,14 @@ def analyze_seg_npy(seg_path: str, expect_mask_shape: Optional[Tuple[int,int]] =
     print("ismanual:", type(ismanual).__name__, f"len={len(ismanual)}" if hasattr(ismanual,"__len__") else None)
     print("zdraw:",    type(zdraw).__name__,  f"len={len(zdraw)}" if hasattr(zdraw,"__len__") else None)
 
-    # ----- ismanual summary (counts) -----
+    # ismanual summary
     if isinstance(ismanual, np.ndarray):
         n_true = int(np.count_nonzero(ismanual))
         n_total = int(ismanual.size)
         print(f"ismanual summary: true={n_true}  false={n_total - n_true}  total={n_total}")
         print("  note: ismanual[k] == True if mask k was drawn manually in GUI; False if computed by Cellpose.")
 
-    # ----- flows mapping (AS-IS: no normalization/squeeze) -----
+    # flows mapping (AS-IS)
     def _mm(x):
         try:
             return f"min={np.nanmin(x):.3f} max={np.nanmax(x):.3f}"
@@ -130,7 +128,6 @@ def analyze_seg_npy(seg_path: str, expect_mask_shape: Optional[Tuple[int,int]] =
             return "min/max=NA"
 
     if isinstance(flows, (list, tuple)):
-        # typical v4 pack, but we report AS-IS
         hsv_rgb   = flows[0] if len(flows) > 0 else None
         prob_255  = flows[1] if len(flows) > 1 else None
         zflow_255 = flows[2] if len(flows) > 2 else None
@@ -144,7 +141,6 @@ def analyze_seg_npy(seg_path: str, expect_mask_shape: Optional[Tuple[int,int]] =
         print("  flows[3] = optional pack (legacy):    ", str(getattr(pack_3,'shape',None)),    str(getattr(pack_3,'dtype',None)))
         print("  flows[4] = [dY, dX, cellprob] f32:    ", str(getattr(dydxprob,'shape',None)),  str(getattr(dydxprob,'dtype',None)), _mm(dydxprob))
 
-        # If flows[4] present, break into components (AS-IS)
         if isinstance(dydxprob, np.ndarray) and dydxprob.ndim >= 3 and dydxprob.shape[0] in (3, 4):
             names = ["dY", "dX", "cellprob"] if dydxprob.shape[0] == 3 else ["dZ", "dY", "dX", "cellprob"]
             for idx, name in enumerate(names):
@@ -217,7 +213,7 @@ def analyze_model(model: Any):
         print("Unknown model type:", type(model).__name__)
 
 
-# ==== SEG PROBE (structured summary + minimal checks, AS-IS) ==================
+# ==== PROBE (structured summary + minimal checks, AS-IS) ======================
 def _arr_info(arr):
     if arr is None:
         return {"type": None}
@@ -235,21 +231,15 @@ def _arr_info(arr):
     return info
 
 def probe_seg_npy(path):
-    """
-    Load a Cellpose *_seg.npy and summarize contents (AS-IS).
-    Returns a dict with keys: keys, masks, outlines, flows, ismanual, images,
-    est_diam, zdraw, colors, filename, channels, checks.
-    """
+    """Load a *_seg.npy and summarize contents (AS-IS)."""
     p = Path(path)
     if not p.exists():
         return {"path": str(p), "error": "file not found"}
-
     try:
         dat = np.load(p, allow_pickle=True).item()
     except Exception as e:
         return {"path": str(p), "error": f"failed to load as pickled dict: {e}"}
 
-    # tolerate key variations across versions
     masks     = dat.get("masks")
     outlines  = dat.get("outlines")
     flows     = dat.get("flows")
@@ -261,7 +251,6 @@ def probe_seg_npy(path):
     zdraw     = dat.get("zdraw")
     colors    = dat.get("colors")
 
-    # basic checks (AS-IS, no normalization)
     checks = {"ok": True, "notes": []}
     if masks is None:
         checks["ok"] = False
@@ -285,11 +274,9 @@ def probe_seg_npy(path):
         checks["notes"].append(f"outlines shape {outlines.shape} != masks shape {masks.shape}")
 
     if isinstance(flows, (list, tuple)) and masks is not None and masks_ndim == 2:
-        f0 = flows[0] if len(flows) > 0 else None  # XY RGB viz
-        f1 = flows[1] if len(flows) > 1 else None  # cellprob
-        # Compare raw leading dims to masks raw shape
+        f0 = flows[0] if len(flows) > 0 else None
+        f1 = flows[1] if len(flows) > 1 else None
         if f0 is not None and hasattr(f0, "shape"):
-            # derive (H,W) from raw arrays without touching them
             f0_hw = (f0.shape[-2], f0.shape[-1]) if f0.ndim >= 2 else None
             m_hw  = (masks_shape[-2], masks_shape[-1])
             if f0_hw and f0_hw != m_hw:
@@ -361,7 +348,7 @@ def cli_probe(paths: List[str]) -> int:
     return rc
 
 
-# ==== RAW (NON-NORMALIZING) SEG AUDIT ========================================
+# ==== SPEC vs OBSERVED AUDIT (AS-IS, NO NORMALIZATION) ========================
 from dataclasses import dataclass
 
 @dataclass
@@ -370,8 +357,25 @@ class Finding:
     code: str
     msg: str
 
-_REQ_KEYS = {"masks", "outlines", "flows", "filename"}
-_OPT_KEYS = {"chan_choose", "channels", "ismanual", "est_diam", "diams", "diameter", "zdraw", "img", "colors"}
+# Ground-truth spec (loose but explicit) for Cellpose v4 save format
+SPEC_REQUIRED_KEYS = {"masks", "outlines", "flows", "filename"}
+SPEC_OPTIONAL_KEYS = {"chan_choose", "channels", "ismanual", "est_diam", "diams", "diameter", "zdraw", "img", "colors"}
+
+SPEC_TEXT = [
+    "Required keys: masks, outlines, flows, filename.",
+    "masks: integer dtype; 2D (H,W) for 2D, or 3D for 3D volumes.",
+    "outlines: integer dtype; same shape as masks.",
+    "flows: list/tuple; typical v4 has len>=5:",
+    "  [0] uint8 RGB-like visualization; spatial HxW should match masks.",
+    "  [1] uint8 cell probability; spatial HxW should match masks.",
+    "  [2] uint8 Z-flow viz (often zeros in 2D); spatial HxW should match masks.",
+    "  [3] optional legacy/None/list.",
+    "  [4] float32 raw fields; shape (3,H,W) for 2D or (4,H,W) for 3D; spatial HxW matches masks.",
+    "ismanual: length should equal max(masks) (one flag per label id).",
+    "chan_choose/channels: typically two ints like [0,0] / [2,1].",
+    "filename: string (full path without suffix) or list-like (GUI batches).",
+    "img/colors/zdraw may be present; img often omitted to keep file small.",
+]
 
 def _raw_spatial_hw(a):
     """Derive spatial (H,W) from raw array WITHOUT modifying it."""
@@ -389,18 +393,21 @@ def _raw_spatial_hw(a):
 def audit_raw_seg_dict(dat: dict) -> Tuple[List[Finding], dict]:
     f: List[Finding] = []
 
-    # --- keys (as-is) ---
+    # --- SPEC SECTION ---
+    # We print the spec separately in the report printer.
+
+    # --- OBSERVED vs SPEC CHECKS (AS-IS) ---
     keys = set(dat.keys())
-    missing = _REQ_KEYS - keys
+    missing = SPEC_REQUIRED_KEYS - keys
     if missing:
         f.append(Finding("ERROR","KEYS.MISSING",f"missing required keys: {sorted(missing)}"))
     else:
-        f.append(Finding("OK","KEYS.PRESENT",f"required keys present: {sorted(_REQ_KEYS)}"))
-    extra = keys - (_REQ_KEYS | _OPT_KEYS)
-    if extra:
-        f.append(Finding("INFO","KEYS.EXTRA",f"extra keys present (not in loose spec): {sorted(extra)}"))
+        f.append(Finding("OK","KEYS.PRESENT",f"required keys present: {sorted(SPEC_REQUIRED_KEYS)}"))
 
-    # --- fields (as-is, no normalization) ---
+    extra = keys - (SPEC_REQUIRED_KEYS | SPEC_OPTIONAL_KEYS)
+    if extra:
+        f.append(Finding("INFO","KEYS.EXTRA",f"extra keys present (not in spec list): {sorted(extra)}"))
+
     masks    = dat.get("masks")
     outlines = dat.get("outlines")
     flows    = dat.get("flows")
@@ -426,27 +433,41 @@ def audit_raw_seg_dict(dat: dict) -> Tuple[List[Finding], dict]:
 
     # outlines
     if outlines is None:
-        f.append(Finding("WARN","OUTLINES.MISSING","'outlines' missing"))
+        f.append(Finding("ERROR","OUTLINES.MISSING","'outlines' missing"))
     else:
         f.append(Finding("INFO","OUTLINES.SHAPE",f"outlines raw shape={outlines.shape}"))
         if hasattr(masks,"shape") and outlines.shape != masks.shape:
-            f.append(Finding("WARN","OUTLINES!=MASKS",f"outlines shape {outlines.shape} != masks {getattr(masks,'shape',None)}"))
+            f.append(Finding("ERROR","OUTLINES!=MASKS",f"outlines shape {outlines.shape} != masks {getattr(masks,'shape',None)}"))
         if np.issubdtype(getattr(outlines,"dtype",np.array([],np.uint8)).type, np.integer):
             f.append(Finding("OK","OUTLINES.DTYPE",f"outlines dtype {outlines.dtype}"))
         else:
-            f.append(Finding("WARN","OUTLINES.DTYPE",f"outlines dtype not integer; observed {getattr(outlines,'dtype',None)}"))
+            f.append(Finding("ERROR","OUTLINES.DTYPE",f"outlines dtype not integer; observed {getattr(outlines,'dtype',None)}"))
 
-    # flows (as-is)
+    # flows (AS-IS)
     if isinstance(flows,(list,tuple)):
         f.append(Finding("INFO","FLOWS.LEN",f"flows length={len(flows)}"))
         for i, fi in enumerate(flows):
             if hasattr(fi, "shape"):
-                f.append(Finding("INFO",f"FLOWS[{i}].SHAPE",f"raw shape={fi.shape}"))
-                f.append(Finding("INFO",f"FLOWS[{i}].DTYPE",f"dtype={fi.dtype}"))
+                sh = fi.shape
+                f.append(Finding("INFO",f"FLOWS[{i}].SHAPE",f"raw shape={sh}"))
+                f.append(Finding("INFO",f"FLOWS[{i}].DTYPE",f"dtype={getattr(fi,'dtype',None)}"))
+                if len(sh) >= 1 and sh[0] == 1:
+                    f.append(Finding("INFO",f"FLOWS[{i}].LEAD1","leading singleton axis at dim 0 observed (e.g., batch/Z=1)"))
                 fi_hw = _raw_spatial_hw(fi)
                 if fi_hw and masks_hw:
-                    lvl = "OK" if fi_hw == masks_hw else "WARN"
-                    f.append(Finding(lvl,f"FLOWS[{i}].SPATIAL",f"(H,W)={fi_hw} vs masks (H,W)={masks_hw} (raw)"))
+                    lvl = "OK" if fi_hw == masks_hw else "ERROR"
+                    reason = "" if lvl == "OK" else " (raw dims differ; spec expects spatial HxW to match masks)"
+                    f.append(Finding(lvl,f"FLOWS[{i}].SPATIAL",f"(H,W)={fi_hw} vs masks (H,W)={masks_hw}{reason}"))
+                # dtype expectations for common indices (no coercion; just compare)
+                if i == 0 and hasattr(fi,"dtype") and fi.dtype != np.uint8:
+                    f.append(Finding("WARN","FLOWS[0].DTYPE.EXPECT","expected uint8 visualization; observed {0}".format(fi.dtype)))
+                if i == 1 and hasattr(fi,"dtype") and fi.dtype != np.uint8:
+                    f.append(Finding("WARN","FLOWS[1].DTYPE.EXPECT","expected uint8 cellprob; observed {0}".format(fi.dtype)))
+                if i == 4 and hasattr(fi,"dtype") and fi.dtype != np.float32:
+                    f.append(Finding("WARN","FLOWS[4].DTYPE.EXPECT","expected float32 raw fields; observed {0}".format(fi.dtype)))
+                if i == 4 and hasattr(fi,"shape"):
+                    if not (fi.ndim == 3 and fi.shape[0] in (3,4)):
+                        f.append(Finding("WARN","FLOWS[4].SHAPE.EXPECT","expected (3,H,W) or (4,H,W)"))
             else:
                 f.append(Finding("INFO",f"FLOWS[{i}].TYPE",f"type={type(fi).__name__} (no shape)"))
     else:
@@ -469,9 +490,16 @@ def audit_raw_seg_dict(dat: dict) -> Tuple[List[Finding], dict]:
         f.append(Finding("INFO","CHANNELS.MISSING","channels/chan_choose not present"))
     else:
         try:
-            f.append(Finding("INFO","CHANNELS.VALUE",f"channels raw value={list(chans) if not isinstance(chans,str) else chans}"))
+            values = list(chans) if not isinstance(chans,str) else chans
         except Exception:
-            f.append(Finding("INFO","CHANNELS.VALUE",f"channels raw value={chans!r}"))
+            values = repr(chans)
+        f.append(Finding("INFO","CHANNELS.VALUE",f"channels raw value={values}"))
+        # light expectation (no coercion)
+        try:
+            if isinstance(values, list) and len(values) != 2:
+                f.append(Finding("WARN","CHANNELS.EXPECT","expected two ints like [0,0] or [2,1]"))
+        except Exception:
+            pass
 
     # filename
     if isinstance(filename, str):
@@ -484,16 +512,28 @@ def audit_raw_seg_dict(dat: dict) -> Tuple[List[Finding], dict]:
     # embedded image
     f.append(Finding("INFO","IMG.PRESENT",f"'img' present={img is not None}"))
 
-    # status summary (no normalization)
+    # overall status: ERROR trumps WARN; WARN trumps OK
     status = "OK"
     if any(x.level=="ERROR" for x in f): status = "ERROR"
     elif any(x.level=="WARN" for x in f): status = "WARN"
 
-    return f, {"status": status, "keys": sorted(keys)}
+    meta = {
+        "status": status,
+        "keys": sorted(keys),
+        "spec_lines": SPEC_TEXT,
+    }
+    return f, meta
 
 def print_audit_raw_report(path: str, findings: List[Finding], meta: dict):
     print(f"\n=== AUDIT-RAW {path} ===")
-    print(f"[status] {meta['status']}  [keys] {meta['keys']}")
+    # SPEC section
+    print("[spec] Cellpose v4 save expectations:")
+    for line in meta.get("spec_lines", []):
+        print("  -", line)
+    # OBSERVED header
+    print(f"\n[observed] keys={meta.get('keys', [])}")
+    # CHECKS grouped
+    print(f"\n[status] {meta['status']}")
     for lvl in ("ERROR","WARN","OK","INFO"):
         group = [x for x in findings if x.level==lvl]
         if group:
@@ -507,8 +547,8 @@ def cli_audit_raw(paths: list) -> int:
         dat = np.load(p, allow_pickle=True).item()
         findings, meta = audit_raw_seg_dict(dat)
         print_audit_raw_report(p, findings, meta)
-        if meta["status"] == "ERROR": rc = 2
-        elif meta["status"] == "WARN": rc = max(rc, 1)
+        if meta["status"] == "ERROR":
+            rc = 2  # ONLY errors cause nonzero exit
     return rc
 
 
@@ -516,7 +556,7 @@ def cli_audit_raw(paths: list) -> int:
 # CLI
 # -----------------------
 def _cli():
-    import argparse, sys, glob
+    import glob
 
     ap = argparse.ArgumentParser("cellpose_seg_analyzer")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -525,7 +565,7 @@ def _cli():
     p_img = sub.add_parser("img", help="inspect a raw image file")
     p_img.add_argument("image", type=str)
 
-    # single seg file
+    # single seg file (as-is viewer)
     p_seg = sub.add_parser("seg", help="inspect a single *_seg.npy")
     p_seg.add_argument("segfile", type=str)
 
@@ -534,12 +574,12 @@ def _cli():
     p_dir.add_argument("dir", type=str)
     p_dir.add_argument("--limit", type=int, default=10)
 
-    # multi-file probe (structured summary + minimal checks)
+    # structured probe (summary + minimal checks)
     p_probe = sub.add_parser("probe", help="probe one or more *_seg.npy files (AS-IS)")
     p_probe.add_argument("paths", nargs="+", help="files or globs (e.g., '/data/*_seg.npy')")
 
-    # raw audit (non-normalizing conformance report)
-    p_audit = sub.add_parser("audit", help="report raw *_seg.npy contents and deviations (no normalization)")
+    # spec vs observed audit (NO NORMALIZATION)
+    p_audit = sub.add_parser("audit", help="report spec vs observed for *_seg.npy (no normalization)")
     p_audit.add_argument("paths", nargs="+", help="files or globs (e.g., '/data/*_seg.npy')")
 
     args = ap.parse_args()
