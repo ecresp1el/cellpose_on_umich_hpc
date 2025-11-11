@@ -226,31 +226,204 @@ def analyze_model(model: Any):
         print("Unknown model type:", type(model).__name__)
 
 
+# ==== SEG PROBE (drop-in) =========================================
+from pathlib import Path
+import numpy as np
+
+def _arr_info(arr):
+    if arr is None:
+        return {"type": None}
+    info = {
+        "type": type(arr).__name__,
+        "dtype": str(getattr(arr, "dtype", None)),
+        "shape": tuple(getattr(arr, "shape", ())),
+    }
+    if hasattr(arr, "size") and hasattr(arr, "dtype") and arr.size and np.issubdtype(arr.dtype, np.number):
+        try:
+            info["min"] = float(np.nanmin(arr))
+            info["max"] = float(np.nanmax(arr))
+        except Exception:
+            pass
+    return info
+
+def probe_seg_npy(path):
+    """
+    Load a Cellpose *_seg.npy and summarize contents.
+    Returns a dict with keys: keys, masks, outlines, flows, ismanual, images,
+    est_diam, zdraw, colors, filename, channels, checks.
+    """
+    p = Path(path)
+    if not p.exists():
+        return {"path": str(p), "error": "file not found"}
+
+    try:
+        dat = np.load(p, allow_pickle=True).item()
+    except Exception as e:
+        return {"path": str(p), "error": f"failed to load as pickled dict: {e}"}
+
+    # tolerate key variations across versions
+    masks     = dat.get("masks")
+    outlines  = dat.get("outlines")
+    flows     = dat.get("flows")
+    channels  = dat.get("chan_choose") or dat.get("channels")
+    ismanual  = dat.get("ismanual")
+    filename  = dat.get("filename")
+    images    = dat.get("img") if "img" in dat else dat.get("images")
+    est_diam  = dat.get("est_diam") or dat.get("diams")
+    zdraw     = dat.get("zdraw")
+    colors    = dat.get("colors")
+
+    # basic checks
+    checks = {"ok": True, "notes": []}
+    if masks is None:
+        checks["ok"] = False
+        checks["notes"].append("masks missing")
+        n_labels = 0
+        masks_ndim = None
+        masks_shape = None
+    else:
+        if not np.issubdtype(masks.dtype, np.integer):
+            checks["ok"] = False
+            checks["notes"].append(f"masks dtype should be integer, got {masks.dtype}")
+        if masks.ndim not in (2, 3):
+            checks["ok"] = False
+            checks["notes"].append(f"masks should be 2D or 3D, got ndim={masks.ndim}")
+        masks_shape = masks.shape
+        masks_ndim = masks.ndim
+        n_labels = int(masks.max()) if masks.size else 0
+
+    if outlines is not None and masks is not None and outlines.shape != masks.shape:
+        checks["ok"] = False
+        checks["notes"].append(f"outlines shape {outlines.shape} != masks shape {masks.shape}")
+
+    if isinstance(flows, (list, tuple)) and masks is not None and masks_ndim == 2:
+        f0 = flows[0] if len(flows) > 0 else None  # XY RGB viz
+        f1 = flows[1] if len(flows) > 1 else None  # cellprob
+        if f0 is not None and hasattr(f0, "shape") and f0.shape[:2] != masks_shape[:2]:
+            checks["ok"] = False
+            checks["notes"].append(f"flows[0] spatial {f0.shape[:2]} != masks {masks_shape[:2]}")
+        if f1 is not None and hasattr(f1, "shape") and f1.shape[:2] != masks_shape[:2]:
+            checks["ok"] = False
+            checks["notes"].append(f"flows[1] spatial {f1.shape[:2]} != masks {masks_shape[:2]}")
+
+    summary = {
+        "path": str(p),
+        "keys": sorted(list(dat.keys())),
+        "filename": filename,
+        "channels": channels,
+        "labels_max": n_labels,
+        "masks": _arr_info(masks),
+        "outlines": _arr_info(outlines),
+        "ismanual": _arr_info(ismanual),
+        "images": _arr_info(images),
+        "est_diam": (float(est_diam) if np.ndim(est_diam)==0 else np.array(est_diam).tolist()) if est_diam is not None else None,
+        "zdraw": _arr_info(zdraw),
+        "colors": _arr_info(colors),
+        "flows": {
+            "len": (len(flows) if isinstance(flows, (list, tuple)) else 0),
+            **({f"[{i}]": _arr_info(flows[i]) for i in range(len(flows))} if isinstance(flows, (list, tuple)) else {})
+        },
+        "checks": checks,
+    }
+    return summary
+
+def print_seg_summary(summary):
+    if "error" in summary:
+        print(f"[ERR] {summary['path']}: {summary['error']}")
+        return
+    print(f"\n=== {summary['path']} ===")
+    print("[keys]", summary["keys"])
+    print("[meta]")
+    fn = summary["filename"]
+    if isinstance(fn, (list, tuple, np.ndarray)):
+        ex = fn[0] if len(fn) else None
+        print(f"  filename: list(len={len(fn)}) example={ex}")
+    else:
+        print(f"  filename: {fn!r}")
+    print(f"  channels: {summary['channels']}")
+    print("[arrays]")
+    def line(name): 
+        a = summary[name]; 
+        print(f"  {name}: {a}")
+    line("masks"); line("outlines"); line("ismanual"); line("images"); line("zdraw"); line("colors")
+    print("[flows]")
+    print(f"  len={summary['flows']['len']}")
+    for k, v in summary["flows"].items():
+        if k != "len":
+            print(f"  flows{k}: {v}")
+    print("[labels]")
+    print(f"  labels_max={summary['labels_max']}")
+    print("[checks]")
+    print(f"  ok={summary['checks']['ok']}  notes={summary['checks']['notes']}")
+
+# Optional: simple CLI hook you can wire into your analyzer's argparse
+def cli_probe(paths):
+    rc = 0
+    for p in paths:
+        s = probe_seg_npy(p)
+        print_seg_summary(s)
+        rc |= 0 if (("error" not in s) and s["checks"]["ok"]) else 1
+    return rc
+# ==================================================================
+
+
 # -----------------------
 # CLI
 # -----------------------
 def _cli():
+    import argparse, sys, glob
+
     ap = argparse.ArgumentParser("cellpose_seg_analyzer")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
+    # raw image inspection
     p_img = sub.add_parser("img", help="inspect a raw image file")
     p_img.add_argument("image", type=str)
 
+    # single seg file (kept for backward compat; calls your existing analyzer)
     p_seg = sub.add_parser("seg", help="inspect a single *_seg.npy")
     p_seg.add_argument("segfile", type=str)
 
+    # directory summary of seg files (your existing behavior)
     p_dir = sub.add_parser("segdir", help="summarize *_seg.npy in a directory")
     p_dir.add_argument("dir", type=str)
     p_dir.add_argument("--limit", type=int, default=10)
+
+    # NEW: multi-file probe using the probe_seg_npy/print_seg_summary helpers
+    p_probe = sub.add_parser("probe", help="probe one or more *_seg.npy files")
+    p_probe.add_argument("paths", nargs="+", help="files or globs (e.g., '/data/*_seg.npy')")
 
     args = ap.parse_args()
 
     if args.cmd == "img":
         analyze_image_file(args.image)
+
     elif args.cmd == "seg":
+        # keep existing behavior; if you want to switch seg->probe entirely, replace next line with the probe call
         analyze_seg_npy(args.segfile)
+
     elif args.cmd == "segdir":
         summarize_seg_dir(args.dir, args.limit)
+
+    elif args.cmd == "probe":
+        # expand globs, de-dup, run probe, return nonzero if any file has issues
+        files = []
+        for p in args.paths:
+            expanded = glob.glob(p)
+            if expanded:
+                files.extend(expanded)
+            else:
+                files.append(p)  # allow literal path even if no glob match
+        if not files:
+            print("[ERR] no files matched")
+            sys.exit(1)
+        rc = 0
+        for f in sorted(set(files)):
+            summary = probe_seg_npy(f)
+            print_seg_summary(summary)
+            bad = ("error" in summary) or (not summary.get("checks", {}).get("ok", False))
+            rc |= int(bad)
+        sys.exit(rc)
 
 
 if __name__ == "__main__":
