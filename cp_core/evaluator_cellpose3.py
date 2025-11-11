@@ -254,7 +254,7 @@ class EvaluatorCellpose3:
             try:
                 stem = p.stem
                 
-                # per-image flow pack (HSV, vec, prob, ...)
+                # fpack = FULL per-image flow pack (list/tuple len≈5); correct to use [0]
                 fpack = flows[i][0] if isinstance(flows[i], (list, tuple)) else flows[i]
 
                 # Save mask via official API (TIF), same filename convention
@@ -445,32 +445,67 @@ def _validate_batch_outputs(masks, flows, styles, n_expected: int) -> bool:
         print(f"[Stage C][WARN] Could not print example outputs: {ex}")
     return ok
 
-def _save_seg_npy_api(im, m, fpack, stem: str, out_dir: Path) -> Path:
+def _save_seg_npy_api(im, m, fpack, stem: str, out_dir: Path, channels=None, diam=None) -> Path:
     """
-    Save official * _seg.npy via Cellpose API for ONE image.
-    API appends '_seg.npy' to the base path we give it.
-    """
-    base = str(out_dir / stem)
-    cp_io.masks_flows_to_seg(im, m, fpack, base, channels=None)  # PACK, not outer list
+    Save <stem>_seg.npy via the official Cellpose v4 API:
 
+        masks_flows_to_seg(images, masks, flows, diams, file_names, channels=None)
+
+    Conformance rules:
+      - images: (list of) 2D/3D ndarrays           → we pass [im]
+      - masks:  (list of) 2D integer ndarrays      → we pass [m]
+      - flows:  (list of) list of ND arrays        → we pass [fpack] (fpack must be a list/tuple len≈5)
+      - diams:  float array (same length as images)→ we pass np.array([diam_or_nan], float)
+      - file_names: (list of) str (no suffix)      → we pass [str(out_dir/stem)]
+      - channels: list of int (optional)           → we pass [[c0,c1]] or [[0,0]] if None
+
+    IMPORTANT: We do not modify array shapes/dtypes—only wrap as lists for the API.
+    """
+    from cellpose import io as cp_io
+    out_dir.mkdir(parents=True, exist_ok=True)
+    base = str(out_dir / stem)
+
+    # --- strict preflight (no normalization) ---
+    if not isinstance(fpack, (list, tuple)):
+        raise TypeError(f"[save_seg] fpack must be list/tuple of flow arrays; got {type(fpack).__name__}")
+    if len(fpack) == 0:
+        raise ValueError("[save_seg] fpack is empty; expected list/tuple with flows (len>=1, typically 5)")
+    if not (isinstance(m, np.ndarray) and np.issubdtype(m.dtype, np.integer)):
+        raise TypeError(f"[save_seg] masks must be integer ndarray; got dtype={getattr(m,'dtype',None)} type={type(m).__name__}")
+
+    # --- build call arguments exactly as spec requires ---
+    images     = [im]                                   # (list of) arrays
+    masks_list = [m]                                    # (list of) int arrays
+    flows_list = [list(fpack)]                          # (list of) list-of-arrays
+    diams_arr  = np.array([float(diam) if diam is not None else np.nan], dtype=float)  # float array
+    file_names = [base]                                 # base path; API appends "_seg.npy"
+    chs_list   = [channels if channels is not None else [0, 0]]  # list of int (two entries typical)
+
+    # --- diagnostics (informational only) ---
+    print(f"[save_seg] writing: {file_names[0] + '_seg.npy'}")
+    print(f"[save_seg] masks.shape={getattr(m,'shape',None)} dtype={getattr(m,'dtype',None)} max={int(m.max()) if m.size else 0}")
+    print(f"[save_seg] flows.len={len(fpack)} shapes={[getattr(a,'shape',None) for a in fpack]}")
+    print(f"[save_seg] diams={diams_arr.tolist()} channels={chs_list[0]}")
+
+    # --- official writer (ORDER + TYPES MATCH SPEC) ---
+    cp_io.masks_flows_to_seg(
+        images=images,
+        masks=masks_list,
+        flows=flows_list,
+        diams=diams_arr,
+        file_names=file_names,
+        channels=chs_list,
+    )
+
+    # --- quick readback (optional) ---
     seg_path = out_dir / f"{stem}_seg.npy"
     try:
         seg = np.load(seg_path, allow_pickle=True).item()
-        keys = list(seg.keys())
-        k_masks = seg.get("masks", None)
-        k_out   = seg.get("outlines", None)
-        k_flow  = seg.get("flows", None)
-        k_chan  = seg.get("chan_choose", None)
-        print(
-            "[Stage C][seg.npy] wrote:", seg_path.name,
-            "| keys=", keys,
-            "| masks=", getattr(k_masks, "shape", "?"),
-            "| outlines=", getattr(k_out, "shape", "?"),
-            "| flows_len=", (len(k_flow) if isinstance(k_flow, (list, tuple)) else "NA"),
-            "| chan_choose=", k_chan
-        )
+        print("[save_seg] ok | keys=", sorted(seg.keys()),
+              "| flows_len=", (len(seg.get("flows", [])) if isinstance(seg.get("flows"), (list, tuple)) else "NA"),
+              "| chan_choose=", seg.get("chan_choose", None))
     except Exception as ex:
-        print(f"[Stage C][WARN] could not inspect {seg_path.name}: {ex}")
+        print(f"[save_seg][WARN] wrote file but could not re-open: {ex}")
     return seg_path
 
 def _save_masks_api(im, m, fpack, stem: str, out_dir: Path) -> None:
