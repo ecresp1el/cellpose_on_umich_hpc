@@ -254,11 +254,16 @@ class EvaluatorCellpose3:
             try:
                 stem = p.stem
 
-                # save mask
-                mpath = out_dir / f"{stem}_masks.tif"
-                cp_io.imsave(mpath, masks[i])
-                print(f"[Stage C] wrote: {mpath.name} (n_masks={int(getattr(masks[i],'max',lambda:0)())})")
+                # Save mask via official API (TIF), same filename convention
+                _save_masks_api(imgs[i], masks[i], flows[i], stem, out_dir)
+                print(f"[Stage C] (n_masks={int(getattr(masks[i],'max',lambda:0)())})")
 
+                # Save native *_seg.npy via API + print its metadata
+                _save_seg_npy_api(imgs[i], masks[i], flows[i], stem, out_dir)
+
+                # If you later want ROIs, uncomment:
+                # _save_rois_api(masks[i], stem, out_dir)
+                
                 # optional: 1x4 panel (guarded)
                 print(f"[Stage C][debug] save_panels flag = {(self.cfg.eval or {}).get('save_panels', True)}")
                 if (self.cfg.eval or {}).get("save_panels", True):
@@ -333,13 +338,31 @@ def _safe_read_image(p: Path) -> Optional[np.ndarray]:
         if not isinstance(im, np.ndarray):
             print(f"[Stage C][WARN] imread did not return ndarray for: {p.name} (type={type(im)})")
             return None
-        if np.any(np.isnan(im)) or np.any(np.isinf(im)):
-            print(f"[Stage C][WARN] NaN/Inf detected in image: {p.name}")
+
         # basic stats
-        print(f"[Stage C] Loaded {p.name}: shape={im.shape}, dtype={im.dtype}, min={np.min(im)}, max={np.max(im)}")
-        if im.ndim >= 3 and im.shape[-1] > 3:
-            print(f"[Stage C][NOTE] {p.name} has >3 channels (C={im.shape[-1]}). CP-SAM only uses first 3. (We are NOT slicing here.)")
+        shp = im.shape
+        print(f"[Stage C] Loaded {p.name}: shape={shp}, dtype={im.dtype}, min={np.min(im)}, max={np.max(im)}")
+
+        # channel-axis diagnostics (print-only; no mutation)
+        if im.ndim == 3:
+            # Heuristic: the channel axis is the smallest of the 3 dims
+            ch_axis = int(np.argmin(shp))
+            n_ch = int(shp[ch_axis])
+
+            # If it looks ambiguous (e.g., all dims large), fall back to channels-last
+            if not (n_ch <= 10 and all(d > 32 for k,d in enumerate(shp) if k != ch_axis)):
+                # Ambiguity fallback: prefer channels-last if last dim is small
+                if shp[2] <= 10:
+                    ch_axis, n_ch = 2, shp[2]
+
+            print(f"[Stage C] channels_axis={ch_axis}  n_channels={n_ch}")
+            if n_ch > 3:
+                print(f"[Stage C][NOTE] {p.name}: detected {n_ch} channels; CP-SAM will internally use the first 3 for inference/plotting.")
+        elif im.ndim > 3:
+            print(f"[Stage C][NOTE] {p.name}: ndim={im.ndim} (>3). Only the first 3 axes are visual channels/H/W for our logs.")
+        # (No slicing occurs here; evaluation uses the array as loaded.)
         return im
+
     except Exception as ex:
         print(f"[Stage C][ERROR] Failed to read {p.name}: {ex}")
         return None
@@ -419,3 +442,57 @@ def _validate_batch_outputs(masks, flows, styles, n_expected: int) -> bool:
         print(f"[Stage C][WARN] Could not print example outputs: {ex}")
     return ok
 
+def _save_seg_npy_api(im, m, f, stem: str, out_dir: Path) -> Path:
+    """
+    Save the official Cellpose *_seg.npy for a single image using the API:
+    cellpose.io.masks_flows_to_seg(images, masks, flows, file_names, ...)
+
+    Writes: <out_dir>/<stem>_seg.npy
+    Prints: keys and shape/dtype summary from the saved file.
+    """
+    base = str(out_dir / stem)            # API will append '_seg.npy'
+    # API accepts singletons or lists; use singletons-for-one
+    cp_io.masks_flows_to_seg(im, m, f, base, channels=None)
+
+    seg_path = out_dir / f"{stem}_seg.npy"
+    try:
+        seg = np.load(seg_path, allow_pickle=True).item()
+        keys = list(seg.keys())
+        # Pull common fields if present
+        k_masks = seg.get("masks", None)
+        k_out   = seg.get("outlines", None)
+        k_flow  = seg.get("flows", None)
+        k_chan  = seg.get("chan_choose", None)
+        print("[Stage C][seg.npy] wrote:", seg_path.name,
+              "| keys=", keys,
+              "| masks=", getattr(k_masks, "shape", "?"),
+              "| outlines=", getattr(k_out, "shape", "?"),
+              "| flows_len=", (len(k_flow) if isinstance(k_flow, (list, tuple)) else "NA"),
+              "| chan_choose=", k_chan)
+    except Exception as ex:
+        print(f"[Stage C][WARN] could not inspect {seg_path.name}: {ex}")
+    return seg_path
+
+def _save_masks_api(im, m, f, stem: str, out_dir: Path) -> None:
+    """
+    Save masks via Cellpose API (TIF). Uses suffix='_cp_masks' by default;
+    we’ll force '_masks' to match your current convention.
+    """
+    # file_names expects a base path (string); savedir=None => same directory as file_names
+    file_names = [str(out_dir / stem)]
+    images = [im]
+    masks  = [m]
+    flows_ = [f]
+    cp_io.save_masks(images, masks, flows_, file_names,
+                     png=False, tif=True, suffix="_masks",
+                     save_flows=False, save_outlines=False,
+                     savedir=None, in_folders=False)
+    print(f"[Stage C] save_masks (API) wrote: {stem}_masks.tif")
+# Optional (disabled by default)
+def _save_rois_api(m, stem: str, out_dir: Path) -> None:
+    """
+    Save ImageJ ROIs zip via API (disabled unless you call it).
+    """
+    zip_path = str(out_dir / f"{stem}_rois.zip")
+    cp_io.save_rois(m, zip_path)
+    print(f"[Stage C] save_rois (API) wrote: {Path(zip_path).name}")
