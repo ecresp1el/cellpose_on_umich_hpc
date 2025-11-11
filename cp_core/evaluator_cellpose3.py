@@ -302,8 +302,8 @@ class EvaluatorCellpose3:
                         )
 
                         fig = plt.figure(figsize=(12, 5))
-                        # IMPORTANT: pass the per-image flow pack (fpack), not the whole flows[i] list-of-lists
-                        plot.show_segmentation(fig, im_plot, masks[i], fpack)  # where fpack = (HSV, vec, prob)
+                        # IMPORTANT:
+                        plot.show_segmentation(fig, im_plot, masks[i], hsv)  # pass ONLY the HSV flow image
                         fig.tight_layout()
                         panel_path = out_dir / f"{stem}_panel_1x4.png"
                         fig.savefig(panel_path, dpi=150)
