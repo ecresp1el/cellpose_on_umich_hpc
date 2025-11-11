@@ -445,51 +445,50 @@ def _validate_batch_outputs(masks, flows, styles, n_expected: int) -> bool:
         print(f"[Stage C][WARN] Could not print example outputs: {ex}")
     return ok
 
-def _save_seg_npy_api(im, m, f, stem: str, out_dir: Path) -> Path:
+def _save_seg_npy_api(im, m, fpack, stem: str, out_dir: Path) -> Path:
     """
-    Save the official Cellpose *_seg.npy for a single image using the API:
-    cellpose.io.masks_flows_to_seg(images, masks, flows, file_names, ...)
-
-    Writes: <out_dir>/<stem>_seg.npy
-    Prints: keys and shape/dtype summary from the saved file.
+    Save official * _seg.npy via Cellpose API for ONE image.
+    API appends '_seg.npy' to the base path we give it.
     """
-    base = str(out_dir / stem)            # API will append '_seg.npy'
-    # API accepts singletons or lists; use singletons-for-one
-    cp_io.masks_flows_to_seg(im, m, f, base, channels=None)
+    base = str(out_dir / stem)
+    cp_io.masks_flows_to_seg(im, m, fpack, base, channels=None)  # PACK, not outer list
 
     seg_path = out_dir / f"{stem}_seg.npy"
     try:
         seg = np.load(seg_path, allow_pickle=True).item()
         keys = list(seg.keys())
-        # Pull common fields if present
         k_masks = seg.get("masks", None)
         k_out   = seg.get("outlines", None)
         k_flow  = seg.get("flows", None)
         k_chan  = seg.get("chan_choose", None)
-        print("[Stage C][seg.npy] wrote:", seg_path.name,
-              "| keys=", keys,
-              "| masks=", getattr(k_masks, "shape", "?"),
-              "| outlines=", getattr(k_out, "shape", "?"),
-              "| flows_len=", (len(k_flow) if isinstance(k_flow, (list, tuple)) else "NA"),
-              "| chan_choose=", k_chan)
+        print(
+            "[Stage C][seg.npy] wrote:", seg_path.name,
+            "| keys=", keys,
+            "| masks=", getattr(k_masks, "shape", "?"),
+            "| outlines=", getattr(k_out, "shape", "?"),
+            "| flows_len=", (len(k_flow) if isinstance(k_flow, (list, tuple)) else "NA"),
+            "| chan_choose=", k_chan
+        )
     except Exception as ex:
         print(f"[Stage C][WARN] could not inspect {seg_path.name}: {ex}")
     return seg_path
 
-def _save_masks_api(im, m, f, stem: str, out_dir: Path) -> None:
+def _save_masks_api(im, m, fpack, stem: str, out_dir: Path) -> None:
     """
-    Save masks via Cellpose API (TIF). Uses suffix='_cp_masks' by default;
-    we’ll force '_masks' to match your current convention.
+    Save masks via Cellpose API (TIF). We pass a single image/mask/flow PACK,
+    wrapped as 1-element lists (the API accepts lists or singletons).
     """
-    # file_names expects a base path (string); savedir=None => same directory as file_names
-    file_names = [str(out_dir / stem)]
     images = [im]
     masks  = [m]
-    flows_ = [f]
-    cp_io.save_masks(images, masks, flows_, file_names,
-                     png=False, tif=True, suffix="_masks",
-                     save_flows=False, save_outlines=False,
-                     savedir=None, in_folders=False)
+    flows_ = [fpack]  # <-- PACK = (HSV, vec, prob, ...)
+    file_names = [str(out_dir / stem)]
+
+    cp_io.save_masks(
+        images, masks, flows_, file_names,
+        png=False, tif=True, suffix="_masks",
+        save_flows=False, save_outlines=False,
+        savedir=None, in_folders=False
+    )
     print(f"[Stage C] save_masks (API) wrote: {stem}_masks.tif")
 # Optional (disabled by default)
 def _save_rois_api(m, stem: str, out_dir: Path) -> None:
