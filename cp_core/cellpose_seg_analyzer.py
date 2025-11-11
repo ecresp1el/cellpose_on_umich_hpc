@@ -139,7 +139,8 @@ def analyze_seg_npy(seg_path: str, expect_mask_shape: Optional[Tuple[int,int]] =
     if expect_mask_shape and hasattr(masks, "shape"):
         if tuple(masks.shape) != tuple(expect_mask_shape):
             print(f"[WARN] mask shape {masks.shape} != expected {expect_mask_shape}")
-        else, 
+        else:
+            print(f"[OK] mask shape matches expected {expect_mask_shape}")
 
 
 # -----------------------
