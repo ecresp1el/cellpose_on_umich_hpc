@@ -1,21 +1,10 @@
 # cp_core/cellpose_seg_analyzer.py
 from __future__ import annotations
-import os, sys, json, argparse
-from pathlib import Path
-from typing import Any, Dict, Iterable, Tuple, Optional, List
 
-import numpy as np
-
-try:
-    from cellpose import io as cp_io
-    from cellpose.models import CellposeModel
-except Exception:
-    cp_io = None
-    CellposeModel = None
-
-# cp_core/cellpose_seg_analyzer.py
-from __future__ import annotations
-import os, sys, json, argparse
+import argparse
+import json
+import os
+import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple, Optional, List
 
@@ -129,8 +118,8 @@ def analyze_seg_npy(seg_path: str, expect_mask_shape: Optional[Tuple[int,int]] =
     if isinstance(flows, (list, tuple)):
         print(f"flows: list len={len(flows)}")
         # Common mapping in docs:
-        # flows[0]=XY flow in RGB (HSV-like) ; flows[1]=cellprob 0-255 ; flows[2]=Z flow or zeros
-        # flows[3]=[dY,dX,cellprob] (or [dZ,dY,dX,cellprob]) ; flows[4]=pixel destinations
+        # flows[0]=XY flow in RGB; flows[1]=cellprob 0-255; flows[2]=Z flow (or zeros);
+        # flows[3]=[dY,dX,cellprob] (or [dZ,dY,dX,cellprob]); flows[4]=pixel destinations
         for idx, comp in enumerate(flows):
             print(f"  flows[{idx}]: shape={_fmt_shape(comp)} dtype={_fmt_dtype(comp)}")
     else:
@@ -224,4 +213,3 @@ def _cli():
 
 if __name__ == "__main__":
     _cli()
-    
