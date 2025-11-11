@@ -22,7 +22,7 @@ import json
 import csv
 import time
 
-from matplotlib
+import matplotlib
 matplotlib.use("Agg")  # headless backend for SLURM jobs
 from matplotlib import pyplot as plt
 import numpy as np
