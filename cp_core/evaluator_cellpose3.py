@@ -4,9 +4,9 @@ EvaluatorCellpose3 — Stage C (Evaluation & Artifact Generation, Cellpose v3 AP
 Purpose
 -------
 Run native-scale inference with a trained Cellpose v3 model and save tidy
-artifacts per image: masks, flows, probabilities, ROIs, and a 1×4 panel
-(input | prob | flow viz | overlay). This class adheres to the Stage C
-section of the contract.
+artifacts per image: masks, flows, probabilities, and ROIs. Panel creation
+is deferred to a future helper once upstream plotting requirements are
+finalized. This class adheres to the Stage C section of the contract.
 
 Notes
 -----
@@ -212,6 +212,8 @@ class EvaluatorCellpose3:
         # 2) load images (no channel slicing here)
         print("[Stage C] Loading images (no channel manipulation in this step)…")
         imgs, kept_files = _load_all_images(files)
+        # `imgs` is a list of numpy arrays exactly as returned by cp_io.imread.
+        # `kept_files` mirrors that list with the Path for each successfully loaded image.
         if not imgs:
             return {"n_images": 0}
 
@@ -232,94 +234,95 @@ class EvaluatorCellpose3:
         masks, flows, styles = [], [], []
         for i, (im, p) in enumerate(zip(imgs, kept_files), 1):
             t0 = time.time()
-            m, f, s = self.model.eval([im], **kw)   # CP-SAM expects list; returns lists
-            m0 = m[0]
-            masks.append(m0)
-            flows.append(f)
-            styles.append(s)
+            # The Cellpose API requires a list of images, even for single-image evaluation.
+            # `im` is therefore the numpy array for the current file and `[im]` satisfies the API.
+            m, f, s = self.model.eval([im], **kw)   # returns (masks, flows, styles) lists of length 1
 
-            nmask = int(getattr(m0, "max", lambda: 0)())
+            # The public docstring for CellposeModel.eval describes the payload per image:
+            #   masks[k] -> labelled array
+            #   flows[k] -> [HSV flow, XY vectors, cellprob, Euler integration, ...]
+            #   styles[k] -> style vector (retained for CP3 compatibility)
+            mask_i = m[0] if isinstance(m, (list, tuple)) else m
+            flow_pack_i = f[0] if isinstance(f, (list, tuple)) else f
+            style_i = s[0] if isinstance(s, (list, tuple)) else s
+
+            masks.append(mask_i)
+            flows.append(flow_pack_i)
+            styles.append(style_i)
+
+            nmask = int(getattr(mask_i, "max", lambda: 0)())
             dt = time.time() - t0
-            print(f"[Stage C] eval {i}/{N}: {p.name}  shape={getattr(im,'shape','?')}  n_masks={nmask}  time={dt:.1f}s", flush=True)
+            print(
+                f"[Stage C] eval {i}/{N}: {p.name}  shape={getattr(im,'shape','?')}  n_masks={nmask}  time={dt:.1f}s",
+                flush=True,
+            )
 
-        # 6) validate outputs
-        if not _validate_batch_outputs(masks, flows, styles, n_expected=len(imgs)):
-            print("[Stage C][ERROR] Output validation failed; stopping to avoid writing inconsistent artifacts.")
-            return {"n_images": 0}
-
-        # 7) save artifacts
-        print("[Stage C] Saving outputs…")
+        # 6) persist native Cellpose artifacts for each image
+        print("[Stage C] Saving native Cellpose outputs…")
         n_images = 0
         for i, p in enumerate(kept_files):
             try:
                 stem = p.stem
-                
-                # fpack = FULL per-image flow pack (list/tuple len≈5); correct to use [0]
-                fpack = flows[i][0] if isinstance(flows[i], (list, tuple)) else flows[i]
+
+                # Prepare single-item payloads that adhere to the Cellpose IO API
+                images_payload = [imgs[i]]
+                masks_payload = [masks[i]]
+                flows_payload = [flows[i]]
+                file_bases = [str(out_dir / stem)]
 
                 # Save mask via official API (TIF), same filename convention
-                _save_masks_api(imgs[i], masks[i], fpack, stem, out_dir)
+                cp_io.save_masks(
+                    images_payload,
+                    masks_payload,
+                    flows_payload,
+                    file_bases,
+                    png=False,
+                    tif=True,
+                    suffix="_masks",
+                    save_flows=False,
+                    save_outlines=False,
+                    savedir=None,
+                    in_folders=False,
+                )
                 print(f"[Stage C] (n_masks={int(getattr(masks[i],'max',lambda:0)())})")
 
                 # Save native *_seg.npy via API + print its metadata
-                _save_seg_npy_api(imgs[i], masks[i], fpack, stem, out_dir)
+                cp_io.masks_flows_to_seg(
+                    images_payload,
+                    masks_payload,
+                    flows_payload,
+                    file_bases,
+                    channels=None,
+                )
 
-                # If you later want ROIs, uncomment:
-                # _save_rois_api(masks[i], stem, out_dir)
-                
-                # optional: 1x4 panel (guarded)
-                print(f"[Stage C][debug] save_panels flag = {(self.cfg.eval or {}).get('save_panels', True)}")
-                if (self.cfg.eval or {}).get("save_panels", True):
+                seg_path = out_dir / f"{stem}_seg.npy"
+                if seg_path.exists():
                     try:
-                        # Prepare image for plotting: CxHxW -> HxWxC (matplotlib wants HWC)
-                        im_plot = imgs[i]
-                        # Use HxWxC for plotting (your imgs are CxHxW)
-                        # Prepare image for panel: smallest dimension = channels → move to last (HxWxC)
-                        if im_plot.ndim == 3:
-                            
-                            # Identify the channel axis as the smallest dimension
-                            ch_axis = int(np.argmin(im_plot.shape))          # pick the smallest dim as channels
-                            n_ch = int(im_plot.shape[ch_axis])
-                            
-                            # Move channels to last (HxWxC)
-                            if ch_axis != 2:
-                                im_plot = np.moveaxis(im_plot, ch_axis, -1)  # -> HxWxC
-                            
-                            # If more than 3 channels, keep only the first 3 for RGB-style plotting
-                            # For plotting, enforce ≤3 channels (CP-SAM/plotting expects RGB/gray)
-                            if n_ch > 3:
-                                print(f"[Stage C][panel] detected {n_ch} channels; using first 3 for panel")
-                                im_plot = im_plot[..., :3]
-                            print(f"[Stage C][panel] channel_axis={ch_axis} n_channels={n_ch} → im_plot={im_plot.shape} {im_plot.dtype}")
-                        else:
-                            # 2D / grayscale case
-                            print(f"[Stage C][panel] grayscale image; im_plot={im_plot.shape} {im_plot.dtype}")
-
-                        # Use the per-image flow pack (list/tuple: [HSV, vec, prob, ...])
-                        fpack = flows[i][0] if isinstance(flows[i], (list, tuple)) else flows[i]
-                        hsv  = fpack[0] if isinstance(fpack, (list, tuple)) and len(fpack) > 0 else None
-                        vec  = fpack[1] if isinstance(fpack, (list, tuple)) and len(fpack) > 1 else None
-                        prob = fpack[2] if isinstance(fpack, (list, tuple)) and len(fpack) > 2 else None
-
-                        # Diagnostics before plotting
+                        seg = np.load(seg_path, allow_pickle=True).item()
+                        keys = list(seg.keys())
+                        k_masks = seg.get("masks", None)
+                        k_out   = seg.get("outlines", None)
+                        k_flow  = seg.get("flows", None)
+                        k_chan  = seg.get("chan_choose", None)
                         print(
-                            "[Stage C][panel] "
-                            f"im_plot={getattr(im_plot,'shape','?')} {getattr(im_plot,'dtype','?')} | "
-                            f"mask={getattr(masks[i],'shape','?')} {getattr(masks[i],'dtype','?')} | "
-                            f"hsv={getattr(hsv,'shape','?')} vec={getattr(vec,'shape','?')} prob={getattr(prob,'shape','?')}"
+                            "[Stage C][seg.npy] wrote:", seg_path.name,
+                            "| keys=", keys,
+                            "| masks=", getattr(k_masks, "shape", "?"),
+                            "| outlines=", getattr(k_out, "shape", "?"),
+                            "| flows_len=", (len(k_flow) if isinstance(k_flow, (list, tuple)) else "NA"),
+                            "| chan_choose=", k_chan
                         )
-
-                        fig = plt.figure(figsize=(12, 5))
-                        # IMPORTANT:
-                        plot.show_segmentation(fig, im_plot, masks[i], hsv)  # pass ONLY the HSV flow image
-                        fig.tight_layout()
-                        panel_path = out_dir / f"{stem}_panel_1x4.png"
-                        fig.savefig(panel_path, dpi=150)
-                        plt.close(fig)
-                        print(f"[Stage C] wrote: {panel_path.name}")
                     except Exception as ex:
-                        print(f"[Stage C][WARN] panel failed for {p.name}: {ex}")
-        
+                        print(f"[Stage C][WARN] could not inspect {seg_path.name}: {ex}")
+                else:
+                    print(f"[Stage C][WARN] Expected seg artifact missing: {seg_path}")
+
+                # If you later want ROIs, uncomment and call Cellpose's API directly:
+                # cp_io.save_rois(masks[i], str(out_dir / f"{stem}_rois.zip"))
+
+                # Placeholder hook for future panel plotting against the raw CP outputs.
+                _panel_placeholder(imgs[i], masks[i], flows[i], out_dir, stem)
+
                 n_images += 1
 
             except Exception as ex:
@@ -410,91 +413,7 @@ def _print_eval_kwargs(kwargs: dict):
         else:
             print(f"  {k}: {v}")
 
-def _validate_batch_outputs(masks, flows, styles, n_expected: int) -> bool:
-    ok = True
-    # length checks
-    try:
-        n_masks = len(masks)
-    except Exception:
-        print("[Stage C][ERROR] masks is not indexable. Got:", type(masks))
-        return False
-    if n_masks != n_expected:
-        print(f"[Stage C][ERROR] Output count mismatch: masks={n_masks} vs images={n_expected}")
-        ok = False
-    try:
-        n_flows = len(flows)
-    except Exception:
-        print("[Stage C][ERROR] flows is not indexable. Got:", type(flows))
-        return False
-    if n_flows != n_expected:
-        print(f"[Stage C][ERROR] Output count mismatch: flows={n_flows} vs images={n_expected}")
-        ok = False
-    try:
-        _ = styles  # styles can be array or list; don’t over-constrain
-    except Exception as ex:
-        print(f"[Stage C][WARN] styles access issue: {ex}")
-    # sample prints
-    try:
-        print(f"[Stage C] Example mask shape={getattr(masks[0], 'shape', 'NA')} dtype={getattr(masks[0], 'dtype', 'NA')} max={getattr(masks[0], 'max', lambda: 'NA')() if hasattr(masks[0],'max') else 'NA'}")
-        if isinstance(flows, (list, tuple)) and len(flows) > 0:
-            f0 = flows[0]
-            if isinstance(f0, (list, tuple)) and len(f0) >= 3:
-                f_xy, f_vec, cellprob = f0[0], f0[1], f0[2]
-                print(f"[Stage C] Example flows[0]: HSV={getattr(f_xy,'shape','NA')}, vec={getattr(f_vec,'shape','NA')}, prob={getattr(cellprob,'shape','NA')}")
-    except Exception as ex:
-        print(f"[Stage C][WARN] Could not print example outputs: {ex}")
-    return ok
 
-def _save_seg_npy_api(im, m, fpack, stem: str, out_dir: Path) -> Path:
-    """
-    Save official * _seg.npy via Cellpose API for ONE image.
-    API appends '_seg.npy' to the base path we give it.
-    """
-    base = str(out_dir / stem)
-    cp_io.masks_flows_to_seg(im, m, fpack, base, channels=None)  # PACK, not outer list
-
-    seg_path = out_dir / f"{stem}_seg.npy"
-    try:
-        seg = np.load(seg_path, allow_pickle=True).item()
-        keys = list(seg.keys())
-        k_masks = seg.get("masks", None)
-        k_out   = seg.get("outlines", None)
-        k_flow  = seg.get("flows", None)
-        k_chan  = seg.get("chan_choose", None)
-        print(
-            "[Stage C][seg.npy] wrote:", seg_path.name,
-            "| keys=", keys,
-            "| masks=", getattr(k_masks, "shape", "?"),
-            "| outlines=", getattr(k_out, "shape", "?"),
-            "| flows_len=", (len(k_flow) if isinstance(k_flow, (list, tuple)) else "NA"),
-            "| chan_choose=", k_chan
-        )
-    except Exception as ex:
-        print(f"[Stage C][WARN] could not inspect {seg_path.name}: {ex}")
-    return seg_path
-
-def _save_masks_api(im, m, fpack, stem: str, out_dir: Path) -> None:
-    """
-    Save masks via Cellpose API (TIF). We pass a single image/mask/flow PACK,
-    wrapped as 1-element lists (the API accepts lists or singletons).
-    """
-    images = [im]
-    masks  = [m]
-    flows_ = [fpack]  # <-- PACK = (HSV, vec, prob, ...)
-    file_names = [str(out_dir / stem)]
-
-    cp_io.save_masks(
-        images, masks, flows_, file_names,
-        png=False, tif=True, suffix="_masks",
-        save_flows=False, save_outlines=False,
-        savedir=None, in_folders=False
-    )
-    print(f"[Stage C] save_masks (API) wrote: {stem}_masks.tif")
-# Optional (disabled by default)
-def _save_rois_api(m, stem: str, out_dir: Path) -> None:
-    """
-    Save ImageJ ROIs zip via API (disabled unless you call it).
-    """
-    zip_path = str(out_dir / f"{stem}_rois.zip")
-    cp_io.save_rois(m, zip_path)
-    print(f"[Stage C] save_rois (API) wrote: {Path(zip_path).name}")
+def _panel_placeholder(*_args, **_kwargs):
+    """Reserved for future CP-native panel plotting once requirements are finalized."""
+    return None
